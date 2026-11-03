@@ -29,3 +29,5 @@ out/
 
 # Logs
 *.log
+
+backend/bin/
