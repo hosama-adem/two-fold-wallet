@@ -32,7 +32,7 @@ The UI should feel sharp. The backend is why the project exists.
 | [`docs/implementation-plan.md`](docs/implementation-plan.md) | 49 days · 7 milestones · one issue per day |
 | [`docs/design-system.md`](docs/design-system.md) | Colour, type, money formatting, components |
 | [`docs/brand/palette.html`](docs/brand/palette.html) | Live WCAG contrast check for the palette |
-| [`docs/issues/day-01.md`](docs/issues/day-01.md) | Day 1 GitHub issue body (paste into GitHub) |
+| [`docs/issues/rebrand-to-twofold.md`](docs/issues/rebrand-to-twofold.md) | Day 1 GitHub issue body (paste into GitHub) |
 | [`docs/pdf/`](docs/pdf/) | Canonical PDF originals of PRD + plan |
 
 Previous product (RealLedger) notes: [`docs/archive/realledger/`](docs/archive/realledger/).
@@ -57,13 +57,23 @@ Previous product (RealLedger) notes: [`docs/archive/realledger/`](docs/archive/r
 
 | Layer | Choice |
 |---|---|
-| API | Go · chi · sqlc · goose · Postgres |
+| API | Go · Gin · pgx · sqlc · goose · Postgres 16 |
 | Jobs | Transactional outbox · River |
-| Customer web | Next.js (or Vite React) · design tokens |
+| Customer web | Next.js · TypeScript · design tokens |
 | Admin | Separate staff auth + TOTP MFA |
 | Ops | OpenTelemetry · Prometheus · Grafana · k6 |
 
-Code lands from **Day 2** onward. Day 1 is docs only — by design.
+## Run locally
+
+```bash
+cp .env.example .env
+./dev.sh up      # Postgres → container twofold-db (host port 5434)
+./dev.sh run     # API on :8080
+curl -s localhost:8080/health
+curl -s localhost:8080/ready
+```
+
+`Makefile` mirrors the same targets when GNU make is installed. Package layout lives under `backend/internal/` per PRD §16.2.
 
 ---
 
