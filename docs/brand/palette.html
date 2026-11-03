@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Twofold — palette & contrast</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;600;700&family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --ink: #07140F;
+      --ink-muted: #3D5248;
+      --paper: #F2F5F3;
+      --surface: #FFFFFF;
+      --line: #D5DED8;
+      --highland: #0F4A38;
+      --highland-deep: #083024;
+      --copper: #B8893B;
+      --success: #1B7A4A;
+      --warning: #A15C12;
+      --danger: #A11F2C;
+      --ledger-debit: #8B2E2E;
+      --ledger-credit: #1B7A4A;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Figtree, system-ui, sans-serif;
+      background:
+        radial-gradient(1200px 600px at 10% -10%, rgba(184, 137, 59, 0.12), transparent 55%),
+        radial-gradient(900px 500px at 100% 0%, rgba(15, 74, 56, 0.10), transparent 50%),
+        var(--paper);
+      color: var(--ink);
+      line-height: 1.5;
+    }
+    main {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 48px 20px 80px;
+    }
+    .brand {
+      font-family: Fraunces, Georgia, serif;
+      font-size: clamp(40px, 8vw, 64px);
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin: 0 0 8px;
+    }
+    .tag {
+      color: var(--ink-muted);
+      font-size: 18px;
+      margin: 0 0 40px;
+    }
+    h2 {
+      font-family: Fraunces, Georgia, serif;
+      font-size: 22px;
+      margin: 40px 0 16px;
+    }
+    .swatches {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 12px;
+    }
+    .swatch {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      overflow: hidden;
+      background: var(--surface);
+    }
+    .swatch .chip {
+      height: 72px;
+    }
+    .swatch .meta {
+      padding: 10px 12px;
+      font-size: 13px;
+    }
+    .swatch code {
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-size: 12px;
+      color: var(--ink-muted);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    th, td {
+      text-align: left;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      font-size: 14px;
+    }
+    th { background: #e8eee9; font-weight: 600; }
+    tr:last-child td { border-bottom: 0; }
+    .pass { color: var(--success); font-weight: 700; }
+    .fail { color: var(--danger); font-weight: 700; }
+    .preview {
+      display: grid;
+      gap: 16px;
+      grid-template-columns: 1fr;
+    }
+    @media (min-width: 720px) {
+      .preview { grid-template-columns: 1fr 1fr; }
+    }
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 20px;
+    }
+    .btn {
+      display: inline-block;
+      background: var(--highland);
+      color: #fff;
+      border: 0;
+      border-radius: 8px;
+      padding: 12px 18px;
+      font-weight: 700;
+      font-size: 15px;
+    }
+    .btn.copper {
+      background: var(--copper);
+      color: var(--ink);
+    }
+    .amount {
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-size: 32px;
+      font-weight: 500;
+      margin: 8px 0 0;
+    }
+    .muted { color: var(--ink-muted); font-size: 14px; }
+    footer {
+      margin-top: 48px;
+      color: var(--ink-muted);
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="brand">Twofold</p>
+    <p class="tag">Every birr, recorded twice. — palette &amp; WCAG AA check</p>
+
+    <h2>Tokens</h2>
+    <div class="swatches" id="swatches"></div>
+
+    <h2>Contrast pairs</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Foreground</th>
+          <th>Background</th>
+          <th>Ratio</th>
+          <th>AA (4.5:1)</th>
+          <th>AAA (7:1)</th>
+        </tr>
+      </thead>
+      <tbody id="pairs"></tbody>
+    </table>
+
+    <h2>UI sketch</h2>
+    <div class="preview">
+      <div class="panel">
+        <div class="muted">Available balance</div>
+        <p class="amount">1,250.00 ETB</p>
+        <p class="muted" style="margin-top:12px">Ledger balance matches · no holds</p>
+        <div style="margin-top:18px">
+          <button class="btn" type="button">Send money</button>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="muted">Fee preview</div>
+        <p style="margin:8px 0 0; font-size:15px">Send <strong>100.00 ETB</strong> to @dawit</p>
+        <p class="muted">Fee 2.00 · Total <span style="font-family:'IBM Plex Mono',monospace;color:var(--ink)">102.00 ETB</span></p>
+        <div style="margin-top:18px">
+          <button class="btn copper" type="button">Confirm with PIN</button>
+        </div>
+      </div>
+    </div>
+
+    <footer>
+      Source of truth: <code>docs/design-system.md</code>. Ratios computed in-browser from sRGB relative luminance.
+    </footer>
+  </main>
+  <script>
+    const tokens = {
+      ink: '#07140F',
+      'ink-muted': '#3D5248',
+      paper: '#F2F5F3',
+      surface: '#FFFFFF',
+      line: '#D5DED8',
+      highland: '#0F4A38',
+      'highland-deep': '#083024',
+      copper: '#B8893B',
+      success: '#1B7A4A',
+      warning: '#A15C12',
+      danger: '#A11F2C',
+      'ledger-debit': '#8B2E2E',
+      'ledger-credit': '#1B7A4A',
+    };
+
+    const pairs = [
+      ['ink', 'paper'],
+      ['ink', 'surface'],
+      ['ink-muted', 'paper'],
+      ['highland', 'paper'],
+      ['#FFFFFF', 'highland'],
+      ['ink', 'copper'],
+      ['#FFFFFF', 'danger'],
+      ['ledger-debit', 'paper'],
+      ['ledger-credit', 'paper'],
+    ];
+
+    function hexToRgb(hex) {
+      const h = hex.replace('#', '');
+      const n = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
+      return [0, 2, 4].map(i => parseInt(n.slice(i, i + 2), 16));
+    }
+
+    function channel(c) {
+      const s = c / 255;
+      return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+    }
+
+    function luminance(hex) {
+      const [r, g, b] = hexToRgb(hex).map(channel);
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    }
+
+    function contrast(a, b) {
+      const L1 = luminance(a);
+      const L2 = luminance(b);
+      const light = Math.max(L1, L2);
+      const dark = Math.min(L1, L2);
+      return (light + 0.05) / (dark + 0.05);
+    }
+
+    function resolve(nameOrHex) {
+      return nameOrHex.startsWith('#') ? nameOrHex : tokens[nameOrHex];
+    }
+
+    const swatches = document.getElementById('swatches');
+    for (const [name, hex] of Object.entries(tokens)) {
+      const el = document.createElement('div');
+      el.className = 'swatch';
+      el.innerHTML = `<div class="chip" style="background:${hex}"></div>
+        <div class="meta"><strong>${name}</strong><br /><code>${hex}</code></div>`;
+      swatches.appendChild(el);
+    }
+
+    const tbody = document.getElementById('pairs');
+    for (const [fgName, bgName] of pairs) {
+      const fg = resolve(fgName);
+      const bg = resolve(bgName);
+      const ratio = contrast(fg, bg);
+      const aa = ratio >= 4.5;
+      const aaa = ratio >= 7;
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><span style="color:${fg};background:${bg};padding:2px 8px;border-radius:4px;border:1px solid #d5ded8">${fgName}</span></td>
+        <td>${bgName}</td>
+        <td style="font-family:'IBM Plex Mono',monospace">${ratio.toFixed(2)}:1</td>
+        <td class="${aa ? 'pass' : 'fail'}">${aa ? 'PASS' : 'FAIL'}</td>
+        <td class="${aaa ? 'pass' : 'fail'}">${aaa ? 'PASS' : '—'}</td>`;
+      tbody.appendChild(tr);
+    }
+  </script>
+</body>
+</html>
