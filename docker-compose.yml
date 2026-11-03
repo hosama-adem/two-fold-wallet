@@ -1,0 +1,22 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: twofold-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: twofold
+      POSTGRES_PASSWORD: twofold
+      POSTGRES_DB: twofold
+    ports:
+      # 5432 is often taken on this machine by another local Postgres — use 5434.
+      - "5434:5432"
+    volumes:
+      - twofold-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U twofold -d twofold"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  twofold-pgdata:
