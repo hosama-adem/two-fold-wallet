@@ -15,6 +15,8 @@ if [[ -f "$ROOT/.env" ]]; then
   set +a
 fi
 
+DATABASE_URL="${DATABASE_URL:-postgres://twofold:twofold@127.0.0.1:5434/twofold?sslmode=disable}"
+
 cmd="${1:-}"
 case "$cmd" in
   up)
@@ -48,8 +50,22 @@ case "$cmd" in
     curl -sf http://localhost:8080/ready
     echo
     ;;
+  migrate-up)
+    cd "$BACKEND" && DATABASE_URL="$DATABASE_URL" go run ./cmd/migrate -command=up -dir=migrations
+    ;;
+  migrate-down)
+    cd "$BACKEND" && DATABASE_URL="$DATABASE_URL" go run ./cmd/migrate -command=down -dir=migrations
+    ;;
+  migrate-new)
+    name="${2:-}"
+    [[ -n "$name" ]] || { echo "usage: ./dev.sh migrate-new add_foo"; exit 1; }
+    cd "$BACKEND" && go run ./cmd/migrate -command=new -dir=migrations -name="$name"
+    ;;
+  generate)
+    cd "$BACKEND" && sqlc generate
+    ;;
   *)
-    echo "usage: ./dev.sh {up|down|run|build|test|vet|lint|health|ready}"
+    echo "usage: ./dev.sh {up|down|run|build|test|vet|lint|health|ready|migrate-up|migrate-down|migrate-new|generate}"
     exit 1
     ;;
 esac

@@ -67,12 +67,14 @@ Previous product (RealLedger) notes: [`docs/archive/realledger/`](docs/archive/r
 
 ```bash
 cp .env.example .env
-./dev.sh up      # Postgres → container twofold-db (host port 5434)
-./dev.sh run     # API on :8080
+./dev.sh up           # Postgres → container twofold-db (host port 5434)
+./dev.sh migrate-up   # goose-format SQL migrations
+./dev.sh run          # API on :8080
 curl -s localhost:8080/health
 curl -s localhost:8080/ready
 ```
 
+Useful targets: `migrate-down`, `migrate-new <name>`, `generate` (sqlc), `test`.  
 `Makefile` mirrors the same targets when GNU make is installed. Package layout lives under `backend/internal/` per PRD §16.2.
 
 ---

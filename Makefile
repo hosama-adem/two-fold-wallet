@@ -1,7 +1,8 @@
-.PHONY: up down logs run build test vet lint tidy health ready
+.PHONY: up down logs run build test vet lint tidy health ready migrate-up migrate-down migrate-new generate
 
 ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 BACKEND := $(ROOT)/backend
+DATABASE_URL ?= postgres://twofold:twofold@127.0.0.1:5434/twofold?sslmode=disable
 
 ifneq (,$(wildcard $(ROOT)/.env))
 include $(ROOT)/.env
@@ -26,7 +27,7 @@ tidy: ## Refresh Go module sums
 build: ## Compile the API
 	cd $(BACKEND) && go build -o bin/api ./cmd/api
 
-test: ## Run unit tests
+test: ## Run unit + integration tests
 	cd $(BACKEND) && go test ./...
 
 vet: ## Static checks
@@ -44,3 +45,16 @@ health: ## Probe liveness
 
 ready: ## Probe readiness (DB)
 	curl -sf http://localhost:8080/ready | tee /dev/stderr
+
+migrate-up: ## Apply goose migrations
+	cd $(BACKEND) && DATABASE_URL="$(DATABASE_URL)" go run ./cmd/migrate -command=up -dir=migrations
+
+migrate-down: ## Roll back one goose migration
+	cd $(BACKEND) && DATABASE_URL="$(DATABASE_URL)" go run ./cmd/migrate -command=down -dir=migrations
+
+migrate-new: ## Create a new goose migration: make migrate-new name=add_foo
+	@test -n "$(name)" || (echo "usage: make migrate-new name=add_foo" && exit 1)
+	cd $(BACKEND) && go run ./cmd/migrate -command=new -dir=migrations -name=$(name)
+
+generate: ## Regenerate sqlc code (requires sqlc CLI on PATH)
+	cd $(BACKEND) && sqlc generate

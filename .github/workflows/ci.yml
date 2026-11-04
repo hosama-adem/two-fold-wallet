@@ -1,0 +1,67 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: twofold
+          POSTGRES_PASSWORD: twofold
+          POSTGRES_DB: twofold
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U twofold -d twofold"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://twofold:twofold@localhost:5432/twofold?sslmode=disable
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Install sqlc
+        uses: sqlc-dev/setup-sqlc@v4
+        with:
+          sqlc-version: "1.29.0"
+
+      - name: Check generated sqlc is fresh
+        working-directory: backend
+        run: |
+          sqlc generate
+          if ! git diff --quiet -- internal/user/userdb; then
+            echo "sqlc output is stale — run sqlc generate and commit internal/user/userdb"
+            git diff -- internal/user/userdb
+            exit 1
+          fi
+
+      - name: Vet
+        working-directory: backend
+        run: go vet ./...
+
+      - name: Migrate up / down / up
+        working-directory: backend
+        run: |
+          go run ./cmd/migrate -command=up -dir=migrations
+          go run ./cmd/migrate -command=down -dir=migrations
+          go run ./cmd/migrate -command=up -dir=migrations
+
+      - name: Test
+        working-directory: backend
+        run: go test ./...
