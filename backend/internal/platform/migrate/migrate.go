@@ -15,98 +15,110 @@ import (
 // Goose-compatible SQL migrations (-- +goose Up / -- +goose Down).
 // Kept intentionally small so money-path dependencies stay lean.
 
-const gooseTable = "goose_db_version"
+const (
+	gooseTable   = "goose_db_version"
+	advisoryLock = 7242019345621 // arbitrary stable key for migrate mutex
+)
 
 // Up applies all pending migrations in dir (lexicographic order).
 func Up(databaseURL, dir string) error {
-	db, err := open(databaseURL)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	if err := ensureVersionTable(db); err != nil {
-		return err
-	}
-
-	files, err := listMigrations(dir)
-	if err != nil {
-		return err
-	}
-
-	applied, err := appliedVersions(db)
-	if err != nil {
-		return err
-	}
-
-	for _, f := range files {
-		version := versionFromName(f)
-		if applied[version] {
-			continue
+	return withLock(databaseURL, func(db *sql.DB) error {
+		if err := ensureVersionTable(db); err != nil {
+			return err
 		}
-		upSQL, _, err := splitGoose(filepath.Join(dir, f))
+
+		files, err := listMigrations(dir)
 		if err != nil {
 			return err
 		}
-		if err := execMigration(db, version, f, upSQL, true); err != nil {
+
+		applied, err := appliedVersions(db)
+		if err != nil {
 			return err
 		}
-	}
-	return nil
+
+		for _, f := range files {
+			version := versionFromName(f)
+			if applied[version] {
+				continue
+			}
+			upSQL, _, err := splitGoose(filepath.Join(dir, f))
+			if err != nil {
+				return err
+			}
+			if err := execMigration(db, version, f, upSQL, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // Down rolls back the most recently applied migration.
 func Down(databaseURL, dir string) error {
+	return withLock(databaseURL, func(db *sql.DB) error {
+		if err := ensureVersionTable(db); err != nil {
+			return err
+		}
+
+		var version int64
+		var fileName string
+		err := db.QueryRow(`
+			SELECT version_id, source
+			FROM ` + gooseTable + `
+			WHERE version_id > 0
+			ORDER BY version_id DESC
+			LIMIT 1`).Scan(&version, &fileName)
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("lookup latest migration: %w", err)
+		}
+
+		path := filepath.Join(dir, fileName)
+		if _, err := os.Stat(path); err != nil {
+			files, listErr := listMigrations(dir)
+			if listErr != nil {
+				return listErr
+			}
+			path = ""
+			for _, f := range files {
+				if versionFromName(f) == version {
+					path = filepath.Join(dir, f)
+					fileName = f
+					break
+				}
+			}
+			if path == "" {
+				return fmt.Errorf("migration file for version %d not found", version)
+			}
+		}
+
+		_, downSQL, err := splitGoose(path)
+		if err != nil {
+			return err
+		}
+		return execMigration(db, version, fileName, downSQL, false)
+	})
+}
+
+func withLock(databaseURL string, fn func(*sql.DB) error) error {
 	db, err := open(databaseURL)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
 
-	if err := ensureVersionTable(db); err != nil {
-		return err
+	ctx := context.Background()
+	if _, err := db.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, advisoryLock); err != nil {
+		return fmt.Errorf("advisory lock: %w", err)
 	}
+	defer func() {
+		_, _ = db.ExecContext(context.Background(), `SELECT pg_advisory_unlock($1)`, advisoryLock)
+	}()
 
-	var version int64
-	var fileName string
-	err = db.QueryRow(`
-		SELECT version_id, source
-		FROM ` + gooseTable + `
-		WHERE version_id > 0
-		ORDER BY version_id DESC
-		LIMIT 1`).Scan(&version, &fileName)
-	if err == sql.ErrNoRows {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("lookup latest migration: %w", err)
-	}
-
-	path := filepath.Join(dir, fileName)
-	if _, err := os.Stat(path); err != nil {
-		// Fall back to discovering by version prefix.
-		files, listErr := listMigrations(dir)
-		if listErr != nil {
-			return listErr
-		}
-		path = ""
-		for _, f := range files {
-			if versionFromName(f) == version {
-				path = filepath.Join(dir, f)
-				fileName = f
-				break
-			}
-		}
-		if path == "" {
-			return fmt.Errorf("migration file for version %d not found", version)
-		}
-	}
-
-	_, downSQL, err := splitGoose(path)
-	if err != nil {
-		return err
-	}
-	return execMigration(db, version, fileName, downSQL, false)
+	return fn(db)
 }
 
 func open(databaseURL string) (*sql.DB, error) {
@@ -169,7 +181,6 @@ func listMigrations(dir string) ([]string, error) {
 }
 
 func versionFromName(name string) int64 {
-	// 00001_users_and_otp.sql → 1
 	num := strings.SplitN(name, "_", 2)[0]
 	var v int64
 	_, _ = fmt.Sscanf(num, "%d", &v)
@@ -203,13 +214,21 @@ func splitGoose(path string) (up, down string, err error) {
 }
 
 func execMigration(db *sql.DB, version int64, source, sqlBody string, applying bool) error {
+	// Extensions must run outside the table DDL transaction.
+	extSQL, restSQL := partitionExtensionStmts(sqlBody)
+	for _, stmt := range extSQL {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("execute %s: %w\nstatement: %s", source, err, stmt)
+		}
+	}
+
 	tx, err := db.Begin()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := execStatements(tx, sqlBody); err != nil {
+	if err := execStatements(tx, restSQL); err != nil {
 		return fmt.Errorf("execute %s: %w", source, err)
 	}
 
@@ -232,15 +251,36 @@ func execMigration(db *sql.DB, version int64, source, sqlBody string, applying b
 	return tx.Commit()
 }
 
-func execStatements(tx *sql.Tx, body string) error {
-	for _, stmt := range strings.Split(body, ";") {
-		stmt = strings.TrimSpace(stmt)
-		if stmt == "" || strings.HasPrefix(stmt, "--") {
+func partitionExtensionStmts(body string) (ext []string, rest string) {
+	var restParts []string
+	for _, stmt := range splitStatements(body) {
+		upper := strings.ToUpper(stmt)
+		if strings.HasPrefix(upper, "CREATE EXTENSION") || strings.HasPrefix(upper, "DROP EXTENSION") {
+			ext = append(ext, stmt)
 			continue
 		}
+		restParts = append(restParts, stmt)
+	}
+	return ext, strings.Join(restParts, ";\n")
+}
+
+func execStatements(tx *sql.Tx, body string) error {
+	for _, stmt := range splitStatements(body) {
 		if _, err := tx.Exec(stmt); err != nil {
 			return fmt.Errorf("%w\nstatement: %s", err, stmt)
 		}
 	}
 	return nil
+}
+
+func splitStatements(body string) []string {
+	var out []string
+	for _, stmt := range strings.Split(body, ";") {
+		stmt = strings.TrimSpace(stmt)
+		if stmt == "" || strings.HasPrefix(stmt, "--") {
+			continue
+		}
+		out = append(out, stmt)
+	}
+	return out
 }

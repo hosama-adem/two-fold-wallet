@@ -107,7 +107,14 @@ func TestGetByPhoneAndMarkVerified(t *testing.T) {
 
 func truncateUsers(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	if _, err := pool.Exec(context.Background(), "TRUNCATE otp_codes, users RESTART IDENTITY CASCADE"); err != nil {
+	_, err := pool.Exec(context.Background(), `
+		DO $$
+		BEGIN
+			IF to_regclass('public.users') IS NOT NULL THEN
+				TRUNCATE otp_codes, users RESTART IDENTITY CASCADE;
+			END IF;
+		END $$;`)
+	if err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 }

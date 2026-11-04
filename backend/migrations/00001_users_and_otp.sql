@@ -50,4 +50,5 @@ CREATE INDEX otp_codes_active_phone_purpose_idx
 DROP INDEX IF EXISTS otp_codes_active_phone_purpose_idx;
 DROP TABLE IF EXISTS otp_codes;
 DROP TABLE IF EXISTS users;
-DROP EXTENSION IF EXISTS citext;
+-- Keep citext installed: dropping/recreating it races under parallel tests
+-- (pg_extension_name_index) and is unnecessary for schema rollback.

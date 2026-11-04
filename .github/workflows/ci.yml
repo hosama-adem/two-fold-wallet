@@ -64,4 +64,5 @@ jobs:
 
       - name: Test
         working-directory: backend
-        run: go test ./...
+        # -p 1: one shared Postgres service — avoid migrate/user package races
+        run: go test -p 1 ./...

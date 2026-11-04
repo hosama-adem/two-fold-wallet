@@ -36,7 +36,8 @@ case "$cmd" in
     cd "$BACKEND" && go build -o bin/api ./cmd/api
     ;;
   test)
-    cd "$BACKEND" && go test ./...
+    # -p 1: packages may share one Postgres; avoid migrate/user races
+    cd "$BACKEND" && go test -p 1 ./...
     ;;
   vet|lint)
     cd "$BACKEND" && go vet ./...
