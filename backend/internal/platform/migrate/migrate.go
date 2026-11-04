@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -38,7 +39,10 @@ func Up(databaseURL, dir string) error {
 		}
 
 		for _, f := range files {
-			version := versionFromName(f)
+			version, err := versionFromName(f)
+			if err != nil {
+				return err
+			}
 			if applied[version] {
 				continue
 			}
@@ -65,7 +69,7 @@ func Down(databaseURL, dir string) error {
 		var fileName string
 		err := db.QueryRow(`
 			SELECT version_id, source
-			FROM ` + gooseTable + `
+			FROM `+gooseTable+`
 			WHERE version_id > 0
 			ORDER BY version_id DESC
 			LIMIT 1`).Scan(&version, &fileName)
@@ -84,7 +88,11 @@ func Down(databaseURL, dir string) error {
 			}
 			path = ""
 			for _, f := range files {
-				if versionFromName(f) == version {
+				candidateVersion, versionErr := versionFromName(f)
+				if versionErr != nil {
+					return versionErr
+				}
+				if candidateVersion == version {
 					path = filepath.Join(dir, f)
 					fileName = f
 					break
@@ -170,21 +178,36 @@ func listMigrations(dir string) ([]string, error) {
 		return nil, fmt.Errorf("read migrations dir: %w", err)
 	}
 	var files []string
+	versions := make(map[int64]string)
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
 			continue
 		}
+		version, err := versionFromName(e.Name())
+		if err != nil {
+			return nil, err
+		}
+		if previous, ok := versions[version]; ok {
+			return nil, fmt.Errorf("duplicate migration version %d in %q and %q", version, previous, e.Name())
+		}
+		versions[version] = e.Name()
 		files = append(files, e.Name())
 	}
 	sort.Strings(files)
 	return files, nil
 }
 
-func versionFromName(name string) int64 {
-	num := strings.SplitN(name, "_", 2)[0]
-	var v int64
-	_, _ = fmt.Sscanf(num, "%d", &v)
-	return v
+func versionFromName(name string) (int64, error) {
+	base := strings.TrimSuffix(filepath.Base(name), filepath.Ext(name))
+	num, _, ok := strings.Cut(base, "_")
+	if !ok || num == "" {
+		return 0, fmt.Errorf("invalid migration filename %q: expected <positive-version>_<name>.sql", name)
+	}
+	version, err := strconv.ParseInt(num, 10, 64)
+	if err != nil || version <= 0 {
+		return 0, fmt.Errorf("invalid migration filename %q: version must be a positive integer", name)
+	}
+	return version, nil
 }
 
 func splitGoose(path string) (up, down string, err error) {
