@@ -3,6 +3,7 @@ package httpx
 import (
 	"encoding/json"
 	"log/slog"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
@@ -31,6 +32,10 @@ func WriteError(c *gin.Context, err error) {
 		} else {
 			slog.Error("request failed", "error", err.Error(), "request_id", reqID)
 		}
+	}
+
+	if he.RetryAfterSeconds > 0 {
+		c.Header("Retry-After", strconv.Itoa(he.RetryAfterSeconds))
 	}
 
 	WriteProblem(c, newProblem(he.Status, he.Code, he.Title, detail, reqID))

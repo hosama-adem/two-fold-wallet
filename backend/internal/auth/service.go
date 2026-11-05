@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/hosama-adem/twofold/backend/internal/audit"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpx"
 	"github.com/hosama-adem/twofold/backend/internal/session"
 	"github.com/hosama-adem/twofold/backend/internal/user"
@@ -37,6 +38,7 @@ type Service struct {
 	users      *user.Repository
 	sessions   *session.Repository
 	tokens     *TokenSigner
+	audit      *audit.Recorder
 	sms        SMSSender
 	log        *slog.Logger
 	clock      Clock
@@ -48,6 +50,7 @@ type ServiceDeps struct {
 	Users      *user.Repository
 	Sessions   *session.Repository
 	Tokens     *TokenSigner
+	Audit      *audit.Recorder
 	SMS        SMSSender
 	Log        *slog.Logger
 	RefreshTTL time.Duration
@@ -71,10 +74,20 @@ func NewService(deps ServiceDeps) *Service {
 		users:      deps.Users,
 		sessions:   deps.Sessions,
 		tokens:     deps.Tokens,
+		audit:      deps.Audit,
 		sms:        sms,
 		log:        log,
 		clock:      systemClock{},
 		refreshTTL: refreshTTL,
+	}
+}
+
+func (s *Service) auditBestEffort(ctx context.Context, e audit.Entry) {
+	if s.audit == nil {
+		return
+	}
+	if err := s.audit.Record(ctx, e); err != nil {
+		s.log.Error("audit record failed", "action", e.Action, "error", err)
 	}
 }
 

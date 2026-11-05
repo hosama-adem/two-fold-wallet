@@ -77,6 +77,14 @@ curl -s localhost:8080/ready
 Useful targets: `migrate-down`, `migrate-new <name>`, `generate` (sqlc), `test`.  
 `Makefile` mirrors the same targets when GNU make is installed. Package layout lives under `backend/internal/` per PRD §16.2.
 
+### Auth (current)
+
+| Concern | Behavior |
+|---|---|
+| Rate limits | In-memory token bucket on register / verify-phone / resend-otp / login (`AUTH_RATE_LIMIT_BURST`, `AUTH_RATE_LIMIT_WINDOW`). Both **IP** and **phone** keys must pass. Exceeded → `429` `rate_limited` + `Retry-After`. Proxies are not trusted by default (`ClientIP` = remote addr). |
+| Sessions | `GET /v1/me/sessions` lists active sessions (`current` from access `sid`). `DELETE /v1/me/sessions/{id}` is owner-only (`204` / `404`). Revoking the current session also fails subsequent Bearer checks (session row is revoked). |
+| Audit | Append-only `audit_logs` (DB trigger blocks UPDATE/DELETE). This milestone records login success/failure, session revoke, and logout — never passwords, OTPs, or tokens. |
+
 ---
 
 ## Accelerated path (3 days → 1 day)

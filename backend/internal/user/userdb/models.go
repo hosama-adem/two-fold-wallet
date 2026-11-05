@@ -10,6 +10,20 @@ import (
 	"github.com/google/uuid"
 )
 
+type AuditLog struct {
+	ID          uuid.UUID  `json:"id"`
+	ActorUserID *uuid.UUID `json:"actor_user_id"`
+	ActorKind   string     `json:"actor_kind"`
+	Action      string     `json:"action"`
+	TargetType  *string    `json:"target_type"`
+	TargetID    *uuid.UUID `json:"target_id"`
+	Summary     []byte     `json:"summary"`
+	Ip          *string    `json:"ip"`
+	UserAgent   *string    `json:"user_agent"`
+	RequestID   *string    `json:"request_id"`
+	CreatedAt   time.Time  `json:"created_at"`
+}
+
 type OtpCode struct {
 	ID         uuid.UUID  `json:"id"`
 	PhoneE164  string     `json:"phone_e164"`

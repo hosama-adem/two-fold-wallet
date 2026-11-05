@@ -13,11 +13,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hosama-adem/twofold/backend/internal/audit"
 	"github.com/hosama-adem/twofold/backend/internal/auth"
 	"github.com/hosama-adem/twofold/backend/internal/platform/config"
 	"github.com/hosama-adem/twofold/backend/internal/platform/database/testutil"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpserver"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpx"
+	"github.com/hosama-adem/twofold/backend/internal/platform/ratelimit"
 	"github.com/hosama-adem/twofold/backend/internal/session"
 	"github.com/hosama-adem/twofold/backend/internal/user"
 )
@@ -37,9 +39,18 @@ func (c fixedClock) Now() time.Time { return c.t }
 
 func newAuthServer(t *testing.T, sms *auth.RecordingSMSSender, clk auth.Clock) *httpserver.Server {
 	t.Helper()
+	return newAuthServerWithLimiter(t, sms, clk, ratelimit.NewMemory(ratelimit.Config{
+		Burst:  1000,
+		Window: time.Minute,
+	}))
+}
+
+func newAuthServerWithLimiter(t *testing.T, sms *auth.RecordingSMSSender, clk auth.Clock, lim ratelimit.Limiter) *httpserver.Server {
+	t.Helper()
 	pool := testutil.Postgres(t)
 	users := user.NewRepository(pool)
 	sessions := session.NewRepository(pool)
+	audits := audit.NewRecorder(pool)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	tokens, err := auth.NewTokenSigner(loadFixturePEM(t), "dev-1", 15*time.Minute, clk)
 	if err != nil {
@@ -49,6 +60,7 @@ func newAuthServer(t *testing.T, sms *auth.RecordingSMSSender, clk auth.Clock) *
 		Users:      users,
 		Sessions:   sessions,
 		Tokens:     tokens,
+		Audit:      audits,
 		SMS:        sms,
 		Log:        log,
 		RefreshTTL: 30 * 24 * time.Hour,
@@ -56,7 +68,7 @@ func newAuthServer(t *testing.T, sms *auth.RecordingSMSSender, clk auth.Clock) *
 	if clk != nil {
 		svc.WithClock(clk)
 	}
-	h := auth.NewHandler(svc)
+	h := auth.NewHandler(svc, lim)
 	return httpserver.New(config.Config{AppEnv: "test", HTTPAddr: ":0"}, pool, log, httpserver.Options{Auth: h})
 }
 

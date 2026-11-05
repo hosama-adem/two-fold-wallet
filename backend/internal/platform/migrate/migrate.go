@@ -251,8 +251,10 @@ func execMigration(db *sql.DB, version int64, source, sqlBody string, applying b
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := execStatements(tx, restSQL); err != nil {
-		return fmt.Errorf("execute %s: %w", source, err)
+	for _, stmt := range restSQL {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("execute %s: %w\nstatement: %s", source, err, stmt)
+		}
 	}
 
 	if applying {
@@ -274,29 +276,52 @@ func execMigration(db *sql.DB, version int64, source, sqlBody string, applying b
 	return tx.Commit()
 }
 
-func partitionExtensionStmts(body string) (ext []string, rest string) {
-	var restParts []string
+func partitionExtensionStmts(body string) (ext []string, rest []string) {
 	for _, stmt := range splitStatements(body) {
 		upper := strings.ToUpper(stmt)
 		if strings.HasPrefix(upper, "CREATE EXTENSION") || strings.HasPrefix(upper, "DROP EXTENSION") {
 			ext = append(ext, stmt)
 			continue
 		}
-		restParts = append(restParts, stmt)
+		rest = append(rest, stmt)
 	}
-	return ext, strings.Join(restParts, ";\n")
-}
-
-func execStatements(tx *sql.Tx, body string) error {
-	for _, stmt := range splitStatements(body) {
-		if _, err := tx.Exec(stmt); err != nil {
-			return fmt.Errorf("%w\nstatement: %s", err, stmt)
-		}
-	}
-	return nil
+	return ext, rest
 }
 
 func splitStatements(body string) []string {
+	const (
+		beginMark = "-- +goose StatementBegin"
+		endMark   = "-- +goose StatementEnd"
+	)
+	var out []string
+	rest := body
+	for {
+		beginIdx := strings.Index(rest, beginMark)
+		if beginIdx < 0 {
+			out = append(out, splitSimpleStatements(rest)...)
+			break
+		}
+		out = append(out, splitSimpleStatements(rest[:beginIdx])...)
+		afterBegin := rest[beginIdx+len(beginMark):]
+		endIdx := strings.Index(afterBegin, endMark)
+		if endIdx < 0 {
+			// Unclosed block — treat remainder as one statement.
+			stmt := strings.TrimSpace(afterBegin)
+			if stmt != "" {
+				out = append(out, stmt)
+			}
+			break
+		}
+		stmt := strings.TrimSpace(afterBegin[:endIdx])
+		if stmt != "" {
+			out = append(out, stmt)
+		}
+		rest = afterBegin[endIdx+len(endMark):]
+	}
+	return out
+}
+
+func splitSimpleStatements(body string) []string {
 	var out []string
 	for _, stmt := range strings.Split(body, ";") {
 		stmt = strings.TrimSpace(stmt)
