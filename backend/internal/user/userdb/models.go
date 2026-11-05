@@ -21,6 +21,19 @@ type OtpCode struct {
 	CreatedAt  time.Time  `json:"created_at"`
 }
 
+type Session struct {
+	ID          uuid.UUID  `json:"id"`
+	UserID      uuid.UUID  `json:"user_id"`
+	FamilyID    uuid.UUID  `json:"family_id"`
+	RefreshHash string     `json:"refresh_hash"`
+	UserAgent   *string    `json:"user_agent"`
+	Ip          *string    `json:"ip"`
+	ExpiresAt   time.Time  `json:"expires_at"`
+	RevokedAt   *time.Time `json:"revoked_at"`
+	ReplacedBy  *uuid.UUID `json:"replaced_by"`
+	CreatedAt   time.Time  `json:"created_at"`
+}
+
 type User struct {
 	ID              uuid.UUID  `json:"id"`
 	PhoneE164       string     `json:"phone_e164"`

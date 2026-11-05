@@ -11,6 +11,7 @@ import (
 	"github.com/hosama-adem/twofold/backend/internal/platform/config"
 	"github.com/hosama-adem/twofold/backend/internal/platform/database"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpserver"
+	"github.com/hosama-adem/twofold/backend/internal/session"
 	"github.com/hosama-adem/twofold/backend/internal/user"
 )
 
@@ -27,6 +28,12 @@ func run() int {
 		return 1
 	}
 
+	tokens, err := auth.NewTokenSigner([]byte(cfg.JWTSigningKey), cfg.JWTKid, cfg.AccessTokenTTL, nil)
+	if err != nil {
+		log.Error("jwt", "error", err)
+		return 1
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -38,7 +45,15 @@ func run() int {
 	defer pool.Close()
 
 	users := user.NewRepository(pool)
-	authSvc := auth.NewService(users, auth.LogSMSSender{Log: log}, log)
+	sessions := session.NewRepository(pool)
+	authSvc := auth.NewService(auth.ServiceDeps{
+		Users:      users,
+		Sessions:   sessions,
+		Tokens:     tokens,
+		SMS:        auth.LogSMSSender{Log: log},
+		Log:        log,
+		RefreshTTL: cfg.RefreshTokenTTL,
+	})
 	authHandler := auth.NewHandler(authSvc)
 
 	srv := httpserver.New(cfg, pool, log, httpserver.Options{Auth: authHandler})

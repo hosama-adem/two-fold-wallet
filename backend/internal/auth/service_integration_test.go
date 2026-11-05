@@ -2,13 +2,14 @@ package auth_test
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,16 +18,17 @@ import (
 	"github.com/hosama-adem/twofold/backend/internal/platform/database/testutil"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpserver"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpx"
+	"github.com/hosama-adem/twofold/backend/internal/session"
 	"github.com/hosama-adem/twofold/backend/internal/user"
 )
 
-var phoneSeq atomic.Uint64
-
 // uniquePhone returns a fresh +2519… number so shared DATABASE_URL runs stay isolated.
 func uniquePhone() string {
-	n := phoneSeq.Add(1)
-	// 9XXXXXXXX — keep within E.164 mobile shape (+2519 + 8 digits)
-	return fmt.Sprintf("+2519%08d", n%100000000)
+	n, err := rand.Int(rand.Reader, big.NewInt(100_000_000))
+	if err != nil {
+		panic(err)
+	}
+	return fmt.Sprintf("+2519%08d", n.Int64())
 }
 
 type fixedClock struct{ t time.Time }
@@ -37,8 +39,20 @@ func newAuthServer(t *testing.T, sms *auth.RecordingSMSSender, clk auth.Clock) *
 	t.Helper()
 	pool := testutil.Postgres(t)
 	users := user.NewRepository(pool)
+	sessions := session.NewRepository(pool)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc := auth.NewService(users, sms, log)
+	tokens, err := auth.NewTokenSigner(loadFixturePEM(t), "dev-1", 15*time.Minute, clk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := auth.NewService(auth.ServiceDeps{
+		Users:      users,
+		Sessions:   sessions,
+		Tokens:     tokens,
+		SMS:        sms,
+		Log:        log,
+		RefreshTTL: 30 * 24 * time.Hour,
+	})
 	if clk != nil {
 		svc.WithClock(clk)
 	}
