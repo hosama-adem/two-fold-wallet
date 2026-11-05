@@ -12,6 +12,7 @@ import (
 
 	"github.com/hosama-adem/twofold/backend/internal/platform/config"
 	"github.com/hosama-adem/twofold/backend/internal/platform/database"
+	"github.com/hosama-adem/twofold/backend/internal/platform/httpx"
 )
 
 // Server wraps the HTTP listener and Gin engine.
@@ -23,15 +24,16 @@ type Server struct {
 	log    *slog.Logger
 }
 
-// New builds an HTTP server with health routes registered.
+// New builds an HTTP server with health routes and the standard middleware stack.
 func New(cfg config.Config, pool *pgxpool.Pool, log *slog.Logger) *Server {
-	if cfg.AppEnv == "production" {
+	if cfg.AppEnv == "production" || cfg.AppEnv == "test" {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
 	engine := gin.New()
-	engine.Use(gin.Recovery())
-	engine.Use(requestLogger(log))
+	for _, mw := range httpx.Standard(httpx.WithLogger(log)) {
+		engine.Use(mw)
+	}
 
 	s := &Server{
 		cfg:    cfg,
@@ -61,11 +63,12 @@ func (s *Server) Engine() *gin.Engine {
 func (s *Server) routes() {
 	s.engine.GET("/health", s.handleHealth)
 	s.engine.GET("/ready", s.handleReady)
+	s.engine.NoRoute(s.handleNotFound)
 }
 
 func (s *Server) handleHealth(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
-		"status": "ok",
+		"status":  "ok",
 		"service": "twofold-api",
 	})
 }
@@ -75,16 +78,22 @@ func (s *Server) handleReady(c *gin.Context) {
 	defer cancel()
 
 	if err := database.Ready(ctx, s.pool); err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"status": "not_ready",
-			"reason": "database_unavailable",
-		})
+		httpx.WriteError(c, httpx.New(
+			http.StatusServiceUnavailable,
+			"database_unavailable",
+			"Service Unavailable",
+			"Database is not ready.",
+		))
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"status": "ready",
 	})
+}
+
+func (s *Server) handleNotFound(c *gin.Context) {
+	httpx.WriteError(c, httpx.NotFound("The requested path was not found."))
 }
 
 // Run listens until the context is cancelled, then shuts down gracefully.
@@ -110,19 +119,5 @@ func (s *Server) Run(ctx context.Context) error {
 		return nil
 	case err := <-errCh:
 		return err
-	}
-}
-
-func requestLogger(log *slog.Logger) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		start := time.Now()
-		c.Next()
-		log.Info("request",
-			"method", c.Request.Method,
-			"path", c.FullPath(),
-			"status", c.Writer.Status(),
-			"duration_ms", time.Since(start).Milliseconds(),
-			"client_ip", c.ClientIP(),
-		)
 	}
 }
