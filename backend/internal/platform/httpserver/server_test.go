@@ -17,7 +17,7 @@ import (
 func TestHealth(t *testing.T) {
 	t.Parallel()
 
-	srv := httpserver.New(config.Config{AppEnv: "test", HTTPAddr: ":0"}, nil, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	srv := httpserver.New(config.Config{AppEnv: "test", HTTPAddr: ":0"}, nil, slog.New(slog.NewTextHandler(os.Stderr, nil)), httpserver.Options{})
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
 
@@ -34,7 +34,7 @@ func TestHealth(t *testing.T) {
 func TestReadyWithoutPool(t *testing.T) {
 	t.Parallel()
 
-	srv := httpserver.New(config.Config{AppEnv: "test", HTTPAddr: ":0"}, nil, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	srv := httpserver.New(config.Config{AppEnv: "test", HTTPAddr: ":0"}, nil, slog.New(slog.NewTextHandler(os.Stderr, nil)), httpserver.Options{})
 	req := httptest.NewRequest(http.MethodGet, "/ready", nil)
 	req.Header.Set("X-Request-ID", "ready-test")
 	rec := httptest.NewRecorder()
@@ -62,7 +62,7 @@ func TestReadyWithoutPool(t *testing.T) {
 func TestNotFoundProblem(t *testing.T) {
 	t.Parallel()
 
-	srv := httpserver.New(config.Config{AppEnv: "test", HTTPAddr: ":0"}, nil, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	srv := httpserver.New(config.Config{AppEnv: "test", HTTPAddr: ":0"}, nil, slog.New(slog.NewTextHandler(os.Stderr, nil)), httpserver.Options{})
 	req := httptest.NewRequest(http.MethodGet, "/does-not-exist", nil)
 	rec := httptest.NewRecorder()
 	srv.Engine().ServeHTTP(rec, req)
