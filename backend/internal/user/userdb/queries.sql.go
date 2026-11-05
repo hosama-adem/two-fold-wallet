@@ -7,9 +7,81 @@ package userdb
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
+
+const consumeOTP = `-- name: ConsumeOTP :one
+UPDATE otp_codes
+SET consumed_at = now()
+WHERE id = $1
+  AND consumed_at IS NULL
+RETURNING id, phone_e164, purpose, code_hash, attempts, expires_at, consumed_at, created_at
+`
+
+func (q *Queries) ConsumeOTP(ctx context.Context, id uuid.UUID) (OtpCode, error) {
+	row := q.db.QueryRow(ctx, consumeOTP, id)
+	var i OtpCode
+	err := row.Scan(
+		&i.ID,
+		&i.PhoneE164,
+		&i.Purpose,
+		&i.CodeHash,
+		&i.Attempts,
+		&i.ExpiresAt,
+		&i.ConsumedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const createOTP = `-- name: CreateOTP :one
+INSERT INTO otp_codes (
+    id,
+    phone_e164,
+    purpose,
+    code_hash,
+    attempts,
+    expires_at,
+    created_at
+) VALUES (
+    $1, $2, $3, $4, 0, $5, $6
+)
+RETURNING id, phone_e164, purpose, code_hash, attempts, expires_at, consumed_at, created_at
+`
+
+type CreateOTPParams struct {
+	ID        uuid.UUID `json:"id"`
+	PhoneE164 string    `json:"phone_e164"`
+	Purpose   string    `json:"purpose"`
+	CodeHash  string    `json:"code_hash"`
+	ExpiresAt time.Time `json:"expires_at"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (q *Queries) CreateOTP(ctx context.Context, arg CreateOTPParams) (OtpCode, error) {
+	row := q.db.QueryRow(ctx, createOTP,
+		arg.ID,
+		arg.PhoneE164,
+		arg.Purpose,
+		arg.CodeHash,
+		arg.ExpiresAt,
+		arg.CreatedAt,
+	)
+	var i OtpCode
+	err := row.Scan(
+		&i.ID,
+		&i.PhoneE164,
+		&i.Purpose,
+		&i.CodeHash,
+		&i.Attempts,
+		&i.ExpiresAt,
+		&i.ConsumedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
 
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (
@@ -65,6 +137,64 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 	return i, err
 }
 
+const getLatestActiveOTPByPhonePurpose = `-- name: GetLatestActiveOTPByPhonePurpose :one
+SELECT id, phone_e164, purpose, code_hash, attempts, expires_at, consumed_at, created_at FROM otp_codes
+WHERE phone_e164 = $1
+  AND purpose = $2
+  AND consumed_at IS NULL
+ORDER BY created_at DESC
+LIMIT 1
+`
+
+type GetLatestActiveOTPByPhonePurposeParams struct {
+	PhoneE164 string `json:"phone_e164"`
+	Purpose   string `json:"purpose"`
+}
+
+func (q *Queries) GetLatestActiveOTPByPhonePurpose(ctx context.Context, arg GetLatestActiveOTPByPhonePurposeParams) (OtpCode, error) {
+	row := q.db.QueryRow(ctx, getLatestActiveOTPByPhonePurpose, arg.PhoneE164, arg.Purpose)
+	var i OtpCode
+	err := row.Scan(
+		&i.ID,
+		&i.PhoneE164,
+		&i.Purpose,
+		&i.CodeHash,
+		&i.Attempts,
+		&i.ExpiresAt,
+		&i.ConsumedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getLatestOTPByPhonePurpose = `-- name: GetLatestOTPByPhonePurpose :one
+SELECT id, phone_e164, purpose, code_hash, attempts, expires_at, consumed_at, created_at FROM otp_codes
+WHERE phone_e164 = $1 AND purpose = $2
+ORDER BY created_at DESC
+LIMIT 1
+`
+
+type GetLatestOTPByPhonePurposeParams struct {
+	PhoneE164 string `json:"phone_e164"`
+	Purpose   string `json:"purpose"`
+}
+
+func (q *Queries) GetLatestOTPByPhonePurpose(ctx context.Context, arg GetLatestOTPByPhonePurposeParams) (OtpCode, error) {
+	row := q.db.QueryRow(ctx, getLatestOTPByPhonePurpose, arg.PhoneE164, arg.Purpose)
+	var i OtpCode
+	err := row.Scan(
+		&i.ID,
+		&i.PhoneE164,
+		&i.Purpose,
+		&i.CodeHash,
+		&i.Attempts,
+		&i.ExpiresAt,
+		&i.ConsumedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getUserByID = `-- name: GetUserByID :one
 SELECT id, phone_e164, handle, display_name, password_hash, pin_hash, pin_failed_count, pin_locked_until, kyc_tier, phone_verified_at, status, created_at, updated_at FROM users
 WHERE id = $1
@@ -113,6 +243,29 @@ func (q *Queries) GetUserByPhone(ctx context.Context, phoneE164 string) (User, e
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const incrementOTPAttempts = `-- name: IncrementOTPAttempts :one
+UPDATE otp_codes
+SET attempts = attempts + 1
+WHERE id = $1
+RETURNING id, phone_e164, purpose, code_hash, attempts, expires_at, consumed_at, created_at
+`
+
+func (q *Queries) IncrementOTPAttempts(ctx context.Context, id uuid.UUID) (OtpCode, error) {
+	row := q.db.QueryRow(ctx, incrementOTPAttempts, id)
+	var i OtpCode
+	err := row.Scan(
+		&i.ID,
+		&i.PhoneE164,
+		&i.Purpose,
+		&i.CodeHash,
+		&i.Attempts,
+		&i.ExpiresAt,
+		&i.ConsumedAt,
+		&i.CreatedAt,
 	)
 	return i, err
 }

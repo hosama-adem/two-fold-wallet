@@ -1,0 +1,268 @@
+package auth
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"github.com/hosama-adem/twofold/backend/internal/platform/httpx"
+	"github.com/hosama-adem/twofold/backend/internal/user"
+)
+
+const (
+	otpTTL          = 5 * time.Minute
+	otpResendCooldown = 60 * time.Second
+
+	genericRegisterMsg = "If this phone can be registered, we sent a verification code."
+	genericVerifyFail  = "Invalid or expired verification code."
+	genericResendMsg   = "If verification is still pending, we sent a new code."
+)
+
+// Clock abstracts time for tests.
+type Clock interface {
+	Now() time.Time
+}
+
+type systemClock struct{}
+
+func (systemClock) Now() time.Time { return time.Now().UTC() }
+
+// Service implements register / verify-phone / resend-otp.
+type Service struct {
+	users  *user.Repository
+	sms    SMSSender
+	log    *slog.Logger
+	clock  Clock
+}
+
+// NewService wires auth use-cases.
+func NewService(users *user.Repository, sms SMSSender, log *slog.Logger) *Service {
+	if log == nil {
+		log = slog.Default()
+	}
+	if sms == nil {
+		sms = LogSMSSender{Log: log}
+	}
+	return &Service{users: users, sms: sms, log: log, clock: systemClock{}}
+}
+
+// WithClock overrides the clock (tests).
+func (s *Service) WithClock(c Clock) *Service {
+	s.clock = c
+	return s
+}
+
+// RegisterInput is the register request body.
+type RegisterInput struct {
+	Phone       string `json:"phone"`
+	Password    string `json:"password"`
+	DisplayName string `json:"display_name"`
+}
+
+// MessageResponse is the opaque success payload.
+type MessageResponse struct {
+	Message string `json:"message"`
+}
+
+// Register creates a pending user (or silently no-ops) and may send an OTP.
+func (s *Service) Register(ctx context.Context, in RegisterInput) (MessageResponse, error) {
+	phone, err := NormalizePhone(in.Phone)
+	if err != nil {
+		return MessageResponse{}, err
+	}
+	displayName, err := normalizeDisplayName(in.DisplayName)
+	if err != nil {
+		return MessageResponse{}, err
+	}
+	if err := ValidatePassword(in.Password); err != nil {
+		return MessageResponse{}, err
+	}
+
+	existing, err := s.users.GetByPhone(ctx, phone)
+	switch {
+	case errors.Is(err, user.ErrNotFound):
+		hash, err := HashPassword(in.Password)
+		if err != nil {
+			return MessageResponse{}, httpx.Internal("Could not secure password.")
+		}
+		_, err = s.users.Create(ctx, user.CreateParams{
+			PhoneE164:    phone,
+			DisplayName:  displayName,
+			PasswordHash: hash,
+			Status:       "pending_verification",
+		})
+		if err != nil {
+			if errors.Is(err, user.ErrPhoneTaken) {
+				// Race: another request created the same phone — treat as existing.
+				return s.registerExisting(ctx, phone)
+			}
+			if errors.Is(err, user.ErrInvalidPhone) {
+				return MessageResponse{}, httpx.ValidationFailed("Phone must be an Ethiopian mobile number in E.164 (+2519… or +2517…).")
+			}
+			return MessageResponse{}, err
+		}
+		if err := s.issueOTP(ctx, phone, false); err != nil {
+			return MessageResponse{}, err
+		}
+		return MessageResponse{Message: genericRegisterMsg}, nil
+
+	case err != nil:
+		return MessageResponse{}, err
+
+	default:
+		_ = existing
+		return s.registerExisting(ctx, phone)
+	}
+}
+
+func (s *Service) registerExisting(ctx context.Context, phone string) (MessageResponse, error) {
+	u, err := s.users.GetByPhone(ctx, phone)
+	if err != nil {
+		// Still return generic success to avoid enumeration.
+		return MessageResponse{Message: genericRegisterMsg}, nil
+	}
+	if u.Status == "pending_verification" {
+		// Respect cooldown; ignore ErrCooldown as success shape.
+		if err := s.issueOTP(ctx, phone, true); err != nil && !errors.Is(err, errCooldown) {
+			return MessageResponse{}, err
+		}
+	}
+	// Already verified (or other status): no OTP.
+	return MessageResponse{Message: genericRegisterMsg}, nil
+}
+
+// VerifyPhoneInput is the verify-phone body.
+type VerifyPhoneInput struct {
+	Phone string `json:"phone"`
+	Code  string `json:"code"`
+}
+
+// VerifyPhone consumes a valid OTP and activates the user.
+func (s *Service) VerifyPhone(ctx context.Context, in VerifyPhoneInput) (MessageResponse, error) {
+	phone, err := NormalizePhone(in.Phone)
+	if err != nil {
+		return MessageResponse{}, err
+	}
+	code := strings.TrimSpace(in.Code)
+	if len(code) != OTPLength {
+		return MessageResponse{}, httpx.ValidationFailed("Code must be a 6-digit number.")
+	}
+
+	u, err := s.users.GetByPhone(ctx, phone)
+	if err != nil {
+		return MessageResponse{}, httpx.ValidationFailed(genericVerifyFail)
+	}
+	if u.Status != "pending_verification" {
+		// Already verified — same client-facing failure (no enumeration of status).
+		return MessageResponse{}, httpx.ValidationFailed(genericVerifyFail)
+	}
+
+	otp, err := s.users.LatestActiveOTP(ctx, phone, user.PurposeVerifyPhone)
+	if err != nil {
+		return MessageResponse{}, httpx.ValidationFailed(genericVerifyFail)
+	}
+
+	now := s.clock.Now()
+	if now.After(otp.ExpiresAt) || otp.Attempts >= OTPMaxAttempts {
+		return MessageResponse{}, httpx.ValidationFailed(genericVerifyFail)
+	}
+
+	if !OTPMatches(code, otp.CodeHash) {
+		_, _ = s.users.IncrementOTPAttempts(ctx, otp.ID)
+		return MessageResponse{}, httpx.ValidationFailed(genericVerifyFail)
+	}
+
+	if _, err := s.users.ConsumeOTP(ctx, otp.ID); err != nil {
+		return MessageResponse{}, httpx.ValidationFailed(genericVerifyFail)
+	}
+	if _, err := s.users.MarkPhoneVerified(ctx, u.ID); err != nil {
+		return MessageResponse{}, err
+	}
+	return MessageResponse{Message: "Phone verified."}, nil
+}
+
+// ResendOTPInput is the resend-otp body.
+type ResendOTPInput struct {
+	Phone string `json:"phone"`
+}
+
+// ResendOTP sends a new code when the account is still pending verification.
+func (s *Service) ResendOTP(ctx context.Context, in ResendOTPInput) (MessageResponse, error) {
+	phone, err := NormalizePhone(in.Phone)
+	if err != nil {
+		return MessageResponse{}, err
+	}
+
+	u, err := s.users.GetByPhone(ctx, phone)
+	if err != nil {
+		return MessageResponse{Message: genericResendMsg}, nil
+	}
+	if u.Status != "pending_verification" {
+		return MessageResponse{Message: genericResendMsg}, nil
+	}
+
+	if err := s.issueOTP(ctx, phone, true); err != nil {
+		if errors.Is(err, errCooldown) {
+			return MessageResponse{}, httpx.New(
+				http.StatusTooManyRequests,
+				"otp_cooldown",
+				"Too Many Requests",
+				"Please wait before requesting another code.",
+			)
+		}
+		return MessageResponse{}, err
+	}
+	return MessageResponse{Message: genericResendMsg}, nil
+}
+
+var errCooldown = errors.New("otp resend cooldown")
+
+func (s *Service) issueOTP(ctx context.Context, phone string, enforceCooldown bool) error {
+	if enforceCooldown {
+		latest, err := s.users.LatestOTP(ctx, phone, user.PurposeVerifyPhone)
+		if err == nil {
+			elapsed := s.clock.Now().Sub(latest.CreatedAt)
+			if elapsed < otpResendCooldown {
+				return errCooldown
+			}
+		} else if !errors.Is(err, user.ErrNotFound) {
+			return err
+		}
+	}
+
+	code, err := GenerateOTP()
+	if err != nil {
+		return httpx.Internal("Could not generate verification code.")
+	}
+	now := s.clock.Now()
+	_, err = s.users.CreateOTP(ctx, user.CreateOTPParams{
+		PhoneE164: phone,
+		Purpose:   user.PurposeVerifyPhone,
+		CodeHash:  HashOTP(code),
+		ExpiresAt: now.Add(otpTTL),
+		CreatedAt: now,
+	})
+	if err != nil {
+		return err
+	}
+	if err := s.sms.SendOTP(ctx, phone, code); err != nil {
+		s.log.Error("sms send failed", "phone", phone, "error", err)
+		return httpx.Internal("Could not send verification code.")
+	}
+	return nil
+}
+
+func normalizeDisplayName(raw string) (string, error) {
+	name := strings.TrimSpace(raw)
+	if name == "" {
+		return "", httpx.ValidationFailed("Display name is required.")
+	}
+	if utf8.RuneCountInString(name) > 80 {
+		return "", httpx.ValidationFailed("Display name must be at most 80 characters.")
+	}
+	return name, nil
+}

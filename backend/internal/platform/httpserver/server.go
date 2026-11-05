@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/hosama-adem/twofold/backend/internal/auth"
 	"github.com/hosama-adem/twofold/backend/internal/platform/config"
 	"github.com/hosama-adem/twofold/backend/internal/platform/database"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpx"
@@ -24,8 +25,13 @@ type Server struct {
 	log    *slog.Logger
 }
 
+// Options configures optional HTTP mounts.
+type Options struct {
+	Auth *auth.Handler
+}
+
 // New builds an HTTP server with health routes and the standard middleware stack.
-func New(cfg config.Config, pool *pgxpool.Pool, log *slog.Logger) *Server {
+func New(cfg config.Config, pool *pgxpool.Pool, log *slog.Logger, opts Options) *Server {
 	if cfg.AppEnv == "production" || cfg.AppEnv == "test" {
 		gin.SetMode(gin.ReleaseMode)
 	}
@@ -41,7 +47,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, log *slog.Logger) *Server {
 		engine: engine,
 		log:    log,
 	}
-	s.routes()
+	s.routes(opts)
 
 	s.http = &http.Server{
 		Addr:              cfg.HTTPAddr,
@@ -60,9 +66,12 @@ func (s *Server) Engine() *gin.Engine {
 	return s.engine
 }
 
-func (s *Server) routes() {
+func (s *Server) routes(opts Options) {
 	s.engine.GET("/health", s.handleHealth)
 	s.engine.GET("/ready", s.handleReady)
+	if opts.Auth != nil {
+		opts.Auth.Mount(s.engine)
+	}
 	s.engine.NoRoute(s.handleNotFound)
 }
 

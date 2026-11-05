@@ -7,9 +7,11 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/hosama-adem/twofold/backend/internal/auth"
 	"github.com/hosama-adem/twofold/backend/internal/platform/config"
 	"github.com/hosama-adem/twofold/backend/internal/platform/database"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpserver"
+	"github.com/hosama-adem/twofold/backend/internal/user"
 )
 
 func main() {
@@ -35,7 +37,11 @@ func run() int {
 	}
 	defer pool.Close()
 
-	srv := httpserver.New(cfg, pool, log)
+	users := user.NewRepository(pool)
+	authSvc := auth.NewService(users, auth.LogSMSSender{Log: log}, log)
+	authHandler := auth.NewHandler(authSvc)
+
+	srv := httpserver.New(cfg, pool, log, httpserver.Options{Auth: authHandler})
 	if err := srv.Run(ctx); err != nil {
 		log.Error("server", "error", err)
 		return 1
