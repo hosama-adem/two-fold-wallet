@@ -3,10 +3,12 @@ package auth_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +19,15 @@ import (
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpx"
 	"github.com/hosama-adem/twofold/backend/internal/user"
 )
+
+var phoneSeq atomic.Uint64
+
+// uniquePhone returns a fresh +2519… number so shared DATABASE_URL runs stay isolated.
+func uniquePhone() string {
+	n := phoneSeq.Add(1)
+	// 9XXXXXXXX — keep within E.164 mobile shape (+2519 + 8 digits)
+	return fmt.Sprintf("+2519%08d", n%100000000)
+}
 
 type fixedClock struct{ t time.Time }
 
@@ -55,8 +66,9 @@ func TestRegisterVerifyHappyPath(t *testing.T) {
 	sms := &auth.RecordingSMSSender{}
 	srv := newAuthServer(t, sms, nil)
 
+	phone := uniquePhone()
 	rec := postJSON(t, srv, "/v1/auth/register", map[string]string{
-		"phone":        "+251911223344",
+		"phone":        phone,
 		"password":     "correct-horse-1",
 		"display_name": "Selam",
 	})
@@ -71,7 +83,7 @@ func TestRegisterVerifyHappyPath(t *testing.T) {
 	}
 
 	rec = postJSON(t, srv, "/v1/auth/verify-phone", map[string]string{
-		"phone": "+251911223344",
+		"phone": phone,
 		"code":  sms.LastCode,
 	})
 	if rec.Code != http.StatusOK {
@@ -87,7 +99,7 @@ func TestRegisterDuplicatePhoneSameShape(t *testing.T) {
 	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
 
 	body := map[string]string{
-		"phone":        "+251911000111",
+		"phone":        uniquePhone(),
 		"password":     "correct-horse-1",
 		"display_name": "Dawit",
 	}
@@ -111,7 +123,7 @@ func TestVerifyWrongCode(t *testing.T) {
 	}
 	sms := &auth.RecordingSMSSender{}
 	srv := newAuthServer(t, sms, nil)
-	phone := "+251922334455"
+	phone := uniquePhone()
 	postJSON(t, srv, "/v1/auth/register", map[string]string{
 		"phone": phone, "password": "correct-horse-1", "display_name": "Hana",
 	})
@@ -127,7 +139,7 @@ func TestVerifyTooManyAttempts(t *testing.T) {
 	}
 	sms := &auth.RecordingSMSSender{}
 	srv := newAuthServer(t, sms, nil)
-	phone := "+251922334466"
+	phone := uniquePhone()
 	postJSON(t, srv, "/v1/auth/register", map[string]string{
 		"phone": phone, "password": "correct-horse-1", "display_name": "Hana",
 	})
@@ -147,7 +159,7 @@ func TestVerifyExpiredOTP(t *testing.T) {
 	}
 	sms := &auth.RecordingSMSSender{}
 	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
-	phone := "+251922334477"
+	phone := uniquePhone()
 	postJSON(t, newAuthServer(t, sms, fixedClock{t: now}), "/v1/auth/register", map[string]string{
 		"phone": phone, "password": "correct-horse-1", "display_name": "Hana",
 	})
@@ -166,7 +178,7 @@ func TestResendCooldown(t *testing.T) {
 	}
 	sms := &auth.RecordingSMSSender{}
 	now := time.Date(2026, 11, 5, 15, 0, 0, 0, time.UTC)
-	phone := "+251933445566"
+	phone := uniquePhone()
 	postJSON(t, newAuthServer(t, sms, fixedClock{t: now}), "/v1/auth/register", map[string]string{
 		"phone": phone, "password": "correct-horse-1", "display_name": "Yonas",
 	})
@@ -199,7 +211,7 @@ func TestReuseConsumedOTPFails(t *testing.T) {
 	}
 	sms := &auth.RecordingSMSSender{}
 	srv := newAuthServer(t, sms, nil)
-	phone := "+251944556677"
+	phone := uniquePhone()
 	postJSON(t, srv, "/v1/auth/register", map[string]string{
 		"phone": phone, "password": "correct-horse-1", "display_name": "Reuse",
 	})
@@ -220,7 +232,7 @@ func TestVerifiedAccountRegisterDoesNotSendOTP(t *testing.T) {
 	}
 	sms := &auth.RecordingSMSSender{}
 	now := time.Date(2026, 11, 5, 16, 0, 0, 0, time.UTC)
-	phone := "+251955667788"
+	phone := uniquePhone()
 	srv := newAuthServer(t, sms, fixedClock{t: now})
 	postJSON(t, srv, "/v1/auth/register", map[string]string{
 		"phone": phone, "password": "correct-horse-1", "display_name": "Done",
