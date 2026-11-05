@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -15,7 +16,10 @@ type Config struct {
 	HTTPAddr           string
 	DatabaseURL        string
 	JWTSigningKey      string
+	JWTKid             string
 	StaffJWTSigningKey string
+	AccessTokenTTL     time.Duration
+	RefreshTokenTTL    time.Duration
 	ShutdownTimeout    time.Duration
 	DBMaxConns         int32
 	DBMinConns         int32
@@ -33,8 +37,11 @@ func Load() (Config, error) {
 		AppEnv:             getenv("APP_ENV", "development"),
 		HTTPAddr:           getenv("HTTP_ADDR", ":8080"),
 		DatabaseURL:        os.Getenv("DATABASE_URL"),
-		JWTSigningKey:      os.Getenv("JWT_SIGNING_KEY"),
+		JWTSigningKey:      normalizePEM(os.Getenv("JWT_SIGNING_KEY")),
+		JWTKid:             getenv("JWT_KID", "dev-1"),
 		StaffJWTSigningKey: os.Getenv("STAFF_JWT_SIGNING_KEY"),
+		AccessTokenTTL:     durationEnv("ACCESS_TOKEN_TTL", 15*time.Minute),
+		RefreshTokenTTL:    durationEnv("REFRESH_TOKEN_TTL", 30*24*time.Hour),
 		ShutdownTimeout:    durationEnv("SHUTDOWN_TIMEOUT", 10*time.Second),
 		DBMaxConns:         int32Env("DB_MAX_CONNS", 10),
 		DBMinConns:         int32Env("DB_MIN_CONNS", 1),
@@ -51,6 +58,19 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// normalizePEM turns env-friendly PEM blobs into parseable PEM text.
+// Supports quoted values and literal "\n" sequences from single-line .env entries.
+func normalizePEM(raw string) string {
+	s := strings.TrimSpace(raw)
+	if len(s) >= 2 {
+		if (s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'') {
+			s = s[1 : len(s)-1]
+		}
+	}
+	s = strings.ReplaceAll(s, `\n`, "\n")
+	return strings.TrimSpace(s)
 }
 
 func getenv(key, fallback string) string {

@@ -10,11 +10,12 @@ import (
 	"unicode/utf8"
 
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpx"
+	"github.com/hosama-adem/twofold/backend/internal/session"
 	"github.com/hosama-adem/twofold/backend/internal/user"
 )
 
 const (
-	otpTTL          = 5 * time.Minute
+	otpTTL            = 5 * time.Minute
 	otpResendCooldown = 60 * time.Second
 
 	genericRegisterMsg = "If this phone can be registered, we sent a verification code."
@@ -31,28 +32,58 @@ type systemClock struct{}
 
 func (systemClock) Now() time.Time { return time.Now().UTC() }
 
-// Service implements register / verify-phone / resend-otp.
+// Service implements register / verify-phone / resend-otp / login / refresh / logout / me.
 type Service struct {
-	users  *user.Repository
-	sms    SMSSender
-	log    *slog.Logger
-	clock  Clock
+	users      *user.Repository
+	sessions   *session.Repository
+	tokens     *TokenSigner
+	sms        SMSSender
+	log        *slog.Logger
+	clock      Clock
+	refreshTTL time.Duration
+}
+
+// ServiceDeps wires auth use-cases.
+type ServiceDeps struct {
+	Users      *user.Repository
+	Sessions   *session.Repository
+	Tokens     *TokenSigner
+	SMS        SMSSender
+	Log        *slog.Logger
+	RefreshTTL time.Duration
 }
 
 // NewService wires auth use-cases.
-func NewService(users *user.Repository, sms SMSSender, log *slog.Logger) *Service {
+func NewService(deps ServiceDeps) *Service {
+	log := deps.Log
 	if log == nil {
 		log = slog.Default()
 	}
+	sms := deps.SMS
 	if sms == nil {
 		sms = LogSMSSender{Log: log}
 	}
-	return &Service{users: users, sms: sms, log: log, clock: systemClock{}}
+	refreshTTL := deps.RefreshTTL
+	if refreshTTL <= 0 {
+		refreshTTL = 30 * 24 * time.Hour
+	}
+	return &Service{
+		users:      deps.Users,
+		sessions:   deps.Sessions,
+		tokens:     deps.Tokens,
+		sms:        sms,
+		log:        log,
+		clock:      systemClock{},
+		refreshTTL: refreshTTL,
+	}
 }
 
 // WithClock overrides the clock (tests).
 func (s *Service) WithClock(c Clock) *Service {
 	s.clock = c
+	if s.tokens != nil {
+		s.tokens.WithClock(c)
+	}
 	return s
 }
 
