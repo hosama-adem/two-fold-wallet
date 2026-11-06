@@ -3,26 +3,29 @@ package httpx
 import (
 	"errors"
 	"net/http"
+	"time"
 )
 
 // Stable machine-readable codes used across the API.
 const (
-	CodeBadRequest         = "bad_request"
-	CodeNotFound           = "not_found"
-	CodeConflict           = "conflict"
-	CodePayloadTooLarge    = "payload_too_large"
-	CodeValidationFailed   = "validation_failed"
-	CodeInternal           = "internal_error"
-	CodeRequestTimeout     = "request_timeout"
+	CodeBadRequest       = "bad_request"
+	CodeNotFound         = "not_found"
+	CodeConflict         = "conflict"
+	CodePayloadTooLarge  = "payload_too_large"
+	CodeValidationFailed = "validation_failed"
+	CodeInternal         = "internal_error"
+	CodeRequestTimeout   = "request_timeout"
+	CodeRateLimited      = "rate_limited"
 )
 
 // Error is a domain/transport error that maps cleanly to a Problem.
 type Error struct {
-	Code    string
-	Title   string
-	Detail  string
-	Status  int
-	wrapped error
+	Code              string
+	Title             string
+	Detail            string
+	Status            int
+	RetryAfterSeconds int
+	wrapped           error
 }
 
 func (e *Error) Error() string {
@@ -72,6 +75,21 @@ func Internal(detail string) *Error {
 		detail = "An unexpected error occurred."
 	}
 	return New(http.StatusInternalServerError, CodeInternal, "Internal Server Error", detail)
+}
+
+// RateLimited returns a 429 problem with Retry-After seconds.
+func RateLimited(retryAfter time.Duration) *Error {
+	sec := int(retryAfter.Round(time.Second) / time.Second)
+	if sec < 1 {
+		sec = 1
+	}
+	return &Error{
+		Status:            http.StatusTooManyRequests,
+		Code:              CodeRateLimited,
+		Title:             "Too Many Requests",
+		Detail:            "Too many requests. Please try again later.",
+		RetryAfterSeconds: sec,
+	}
 }
 
 // AsError extracts an *Error from err, if present.

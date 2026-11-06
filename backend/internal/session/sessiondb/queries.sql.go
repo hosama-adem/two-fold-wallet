@@ -136,6 +136,50 @@ func (q *Queries) GetSessionByRefreshHashForUpdate(ctx context.Context, refreshH
 	return i, err
 }
 
+const listActiveSessionsByUser = `-- name: ListActiveSessionsByUser :many
+SELECT id, user_id, family_id, refresh_hash, user_agent, ip, expires_at, revoked_at, replaced_by, created_at FROM sessions
+WHERE user_id = $1
+  AND revoked_at IS NULL
+  AND expires_at > $2
+ORDER BY created_at DESC
+`
+
+type ListActiveSessionsByUserParams struct {
+	UserID    uuid.UUID `json:"user_id"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+func (q *Queries) ListActiveSessionsByUser(ctx context.Context, arg ListActiveSessionsByUserParams) ([]Session, error) {
+	rows, err := q.db.Query(ctx, listActiveSessionsByUser, arg.UserID, arg.ExpiresAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Session{}
+	for rows.Next() {
+		var i Session
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.FamilyID,
+			&i.RefreshHash,
+			&i.UserAgent,
+			&i.Ip,
+			&i.ExpiresAt,
+			&i.RevokedAt,
+			&i.ReplacedBy,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markSessionReplaced = `-- name: MarkSessionReplaced :one
 UPDATE sessions
 SET
@@ -209,4 +253,36 @@ func (q *Queries) RevokeSessionFamily(ctx context.Context, familyID uuid.UUID) (
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const revokeSessionForUser = `-- name: RevokeSessionForUser :one
+UPDATE sessions
+SET revoked_at = now()
+WHERE id = $1
+  AND user_id = $2
+  AND revoked_at IS NULL
+RETURNING id, user_id, family_id, refresh_hash, user_agent, ip, expires_at, revoked_at, replaced_by, created_at
+`
+
+type RevokeSessionForUserParams struct {
+	ID     uuid.UUID `json:"id"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+func (q *Queries) RevokeSessionForUser(ctx context.Context, arg RevokeSessionForUserParams) (Session, error) {
+	row := q.db.QueryRow(ctx, revokeSessionForUser, arg.ID, arg.UserID)
+	var i Session
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.FamilyID,
+		&i.RefreshHash,
+		&i.UserAgent,
+		&i.Ip,
+		&i.ExpiresAt,
+		&i.RevokedAt,
+		&i.ReplacedBy,
+		&i.CreatedAt,
+	)
+	return i, err
 }

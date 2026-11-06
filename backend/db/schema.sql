@@ -66,3 +66,26 @@ CREATE INDEX sessions_family_id_idx ON sessions (family_id);
 CREATE INDEX sessions_active_user_idx
     ON sessions (user_id)
     WHERE revoked_at IS NULL;
+
+CREATE TABLE audit_logs (
+    id              UUID PRIMARY KEY,
+    actor_user_id   UUID REFERENCES users (id),
+    actor_kind      TEXT NOT NULL,
+    action          TEXT NOT NULL,
+    target_type     TEXT,
+    target_id       UUID,
+    summary         JSONB NOT NULL DEFAULT '{}'::jsonb,
+    ip              TEXT,
+    user_agent      TEXT,
+    request_id      TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT audit_logs_actor_kind_known CHECK (
+        actor_kind IN ('user', 'staff', 'system', 'anonymous')
+    )
+);
+
+CREATE INDEX audit_logs_actor_user_id_idx ON audit_logs (actor_user_id);
+CREATE INDEX audit_logs_action_idx ON audit_logs (action);
+CREATE INDEX audit_logs_target_idx ON audit_logs (target_type, target_id);
+CREATE INDEX audit_logs_created_at_idx ON audit_logs (created_at DESC);

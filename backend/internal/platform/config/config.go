@@ -20,6 +20,8 @@ type Config struct {
 	StaffJWTSigningKey string
 	AccessTokenTTL     time.Duration
 	RefreshTokenTTL    time.Duration
+	AuthRateLimitBurst int
+	AuthRateLimitWindow time.Duration
 	ShutdownTimeout    time.Duration
 	DBMaxConns         int32
 	DBMinConns         int32
@@ -40,11 +42,13 @@ func Load() (Config, error) {
 		JWTSigningKey:      normalizePEM(os.Getenv("JWT_SIGNING_KEY")),
 		JWTKid:             getenv("JWT_KID", "dev-1"),
 		StaffJWTSigningKey: os.Getenv("STAFF_JWT_SIGNING_KEY"),
-		AccessTokenTTL:     durationEnv("ACCESS_TOKEN_TTL", 15*time.Minute),
-		RefreshTokenTTL:    durationEnv("REFRESH_TOKEN_TTL", 30*24*time.Hour),
-		ShutdownTimeout:    durationEnv("SHUTDOWN_TIMEOUT", 10*time.Second),
-		DBMaxConns:         int32Env("DB_MAX_CONNS", 10),
-		DBMinConns:         int32Env("DB_MIN_CONNS", 1),
+		AccessTokenTTL:      durationEnv("ACCESS_TOKEN_TTL", 15*time.Minute),
+		RefreshTokenTTL:     durationEnv("REFRESH_TOKEN_TTL", 30*24*time.Hour),
+		AuthRateLimitBurst:  int(int32Env("AUTH_RATE_LIMIT_BURST", 5)),
+		AuthRateLimitWindow: durationEnv("AUTH_RATE_LIMIT_WINDOW", time.Minute),
+		ShutdownTimeout:     durationEnv("SHUTDOWN_TIMEOUT", 10*time.Second),
+		DBMaxConns:          int32Env("DB_MAX_CONNS", 10),
+		DBMinConns:          int32Env("DB_MIN_CONNS", 1),
 	}
 
 	if cfg.DatabaseURL == "" {
