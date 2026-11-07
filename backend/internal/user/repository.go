@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -111,6 +112,29 @@ func (r *Repository) updatePinHash(ctx context.Context, q *userdb.Queries, id uu
 		ID:      id,
 		PinHash: &pinHash,
 	})
+	if err != nil {
+		return userdb.User{}, mapReadError(err)
+	}
+	return u, nil
+}
+
+// RecordPinFailure atomically increments pin_failed_count and locks at maxFailures.
+// lockedUntil is applied only on the attempt that crosses the threshold.
+func (r *Repository) RecordPinFailure(ctx context.Context, id uuid.UUID, maxFailures int32, lockedUntil time.Time) (userdb.User, error) {
+	u, err := r.q.RecordPinFailure(ctx, userdb.RecordPinFailureParams{
+		ID:          id,
+		MaxFailures: maxFailures,
+		LockedUntil: &lockedUntil,
+	})
+	if err != nil {
+		return userdb.User{}, mapReadError(err)
+	}
+	return u, nil
+}
+
+// ResetPinLockout clears failure count and lock timestamp (success or expired lock).
+func (r *Repository) ResetPinLockout(ctx context.Context, id uuid.UUID) (userdb.User, error) {
+	u, err := r.q.ResetPinLockout(ctx, id)
 	if err != nil {
 		return userdb.User{}, mapReadError(err)
 	}

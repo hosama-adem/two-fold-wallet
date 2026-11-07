@@ -9,6 +9,7 @@ import (
 
 	"github.com/hosama-adem/twofold/backend/internal/audit"
 	"github.com/hosama-adem/twofold/backend/internal/auth"
+	"github.com/hosama-adem/twofold/backend/internal/pin"
 	"github.com/hosama-adem/twofold/backend/internal/platform/config"
 	"github.com/hosama-adem/twofold/backend/internal/platform/database"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpserver"
@@ -49,6 +50,12 @@ func run() int {
 	users := user.NewRepository(pool)
 	sessions := session.NewRepository(pool)
 	audits := audit.NewRecorder(pool)
+	pins := pin.New(pin.Deps{
+		Users: users,
+		Audit: audits,
+		Match: auth.VerifyPIN,
+		Log:   log,
+	})
 	limiter := ratelimit.NewMemory(ratelimit.Config{
 		Burst:  cfg.AuthRateLimitBurst,
 		Window: cfg.AuthRateLimitWindow,
@@ -59,6 +66,7 @@ func run() int {
 		Sessions:   sessions,
 		Tokens:     tokens,
 		Audit:      audits,
+		Pins:       pins,
 		Pool:       pool,
 		SMS:        auth.LogSMSSender{Log: log},
 		Log:        log,

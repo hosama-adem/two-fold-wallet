@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hosama-adem/twofold/backend/internal/audit"
+	"github.com/hosama-adem/twofold/backend/internal/pin"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpx"
 	"github.com/hosama-adem/twofold/backend/internal/user"
 )
@@ -68,14 +69,13 @@ func (s *Service) SetOrChangePIN(ctx context.Context, userID uuid.UUID, in SetPI
 		if in.OldPIN == "" {
 			return MessageResponse{}, httpx.ValidationFailed("Current PIN is required to change PIN.")
 		}
-		if err := validatePINFormat(in.OldPIN); err != nil {
-			// Same client-facing failure as a wrong PIN — avoid format oracle.
-			_, _ = VerifyPIN(*u.PinHash, "0000")
-			return MessageResponse{}, invalidCurrentPIN()
-		}
-		ok, verr := VerifyPIN(*u.PinHash, in.OldPIN)
-		if verr != nil || !ok {
-			return MessageResponse{}, invalidCurrentPIN()
+		// Same lockout path money movement will use — wrong old_pin burns tries.
+		if err := s.pins.Verify(ctx, userID, in.OldPIN, pin.Meta{
+			UserAgent: meta.UserAgent,
+			IP:        meta.IP,
+			RequestID: meta.RequestID,
+		}); err != nil {
+			return MessageResponse{}, err
 		}
 		action = audit.ActionPINChange
 	}
@@ -194,8 +194,4 @@ func VerifyPIN(encoded, pin string) (bool, error) {
 
 func invalidPassword() *httpx.Error {
 	return httpx.New(http.StatusUnauthorized, "invalid_password", "Unauthorized", "Invalid password.")
-}
-
-func invalidCurrentPIN() *httpx.Error {
-	return httpx.New(http.StatusUnauthorized, "invalid_pin", "Unauthorized", "Invalid current PIN.")
 }

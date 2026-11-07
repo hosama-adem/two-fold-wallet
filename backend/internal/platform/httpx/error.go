@@ -25,7 +25,10 @@ type Error struct {
 	Detail            string
 	Status            int
 	RetryAfterSeconds int
-	wrapped           error
+	// RFC 9457 extension members (copied onto Problem when present).
+	TriesRemaining *int
+	LockedUntil    *time.Time
+	wrapped        error
 }
 
 func (e *Error) Error() string {
@@ -43,6 +46,25 @@ func (e *Error) Unwrap() error { return e.wrapped }
 // New builds an httpx.Error.
 func New(status int, code, title, detail string) *Error {
 	return &Error{Status: status, Code: code, Title: title, Detail: detail}
+}
+
+// WithTriesRemaining attaches how many PIN attempts remain (RFC 9457 extension).
+func (e *Error) WithTriesRemaining(n int) *Error {
+	if e == nil {
+		return nil
+	}
+	e.TriesRemaining = &n
+	return e
+}
+
+// WithLockedUntil attaches when a PIN lockout ends (RFC 9457 extension).
+func (e *Error) WithLockedUntil(t time.Time) *Error {
+	if e == nil {
+		return nil
+	}
+	utc := t.UTC()
+	e.LockedUntil = &utc
+	return e
 }
 
 // Wrap attaches a cause while preserving status/code.

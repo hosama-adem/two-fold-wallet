@@ -25,6 +25,8 @@ const (
 	ActionSessionLogout = "session.logout"
 	ActionPINSet        = "pin.set"
 	ActionPINChange     = "pin.change"
+	ActionPINFailure    = "pin.failure"
+	ActionPINLockout    = "pin.lockout"
 )
 
 // Entry is one append-only audit event.

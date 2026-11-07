@@ -42,6 +42,30 @@ SET
 WHERE id = $1
 RETURNING *;
 
+-- name: RecordPinFailure :one
+-- Atomically bump the failure counter; lock when the attempt that hits max_failures lands.
+UPDATE users
+SET
+    pin_failed_count = pin_failed_count + 1,
+    pin_locked_until = CASE
+        WHEN pin_failed_count < sqlc.arg(max_failures)
+             AND pin_failed_count + 1 >= sqlc.arg(max_failures)
+            THEN sqlc.arg(locked_until)
+        ELSE pin_locked_until
+    END,
+    updated_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING *;
+
+-- name: ResetPinLockout :one
+UPDATE users
+SET
+    pin_failed_count = 0,
+    pin_locked_until = NULL,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
 -- name: CreateOTP :one
 INSERT INTO otp_codes (
     id,
