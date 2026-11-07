@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hosama-adem/twofold/backend/internal/audit"
 	"github.com/hosama-adem/twofold/backend/internal/auth"
 	"github.com/hosama-adem/twofold/backend/internal/platform/config"
 	"github.com/hosama-adem/twofold/backend/internal/platform/database/testutil"
@@ -40,6 +41,7 @@ func newAuthServer(t *testing.T, sms *auth.RecordingSMSSender, clk auth.Clock) *
 	pool := testutil.Postgres(t)
 	users := user.NewRepository(pool)
 	sessions := session.NewRepository(pool)
+	audits := audit.NewRecorder(pool)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	tokens, err := auth.NewTokenSigner(loadFixturePEM(t), "dev-1", 15*time.Minute, clk)
 	if err != nil {
@@ -48,6 +50,8 @@ func newAuthServer(t *testing.T, sms *auth.RecordingSMSSender, clk auth.Clock) *
 	svc := auth.NewService(auth.ServiceDeps{
 		Users:      users,
 		Sessions:   sessions,
+		Audit:      audits,
+		Pool:       pool,
 		Tokens:     tokens,
 		SMS:        sms,
 		Log:        log,
@@ -62,12 +66,25 @@ func newAuthServer(t *testing.T, sms *auth.RecordingSMSSender, clk auth.Clock) *
 
 func postJSON(t *testing.T, srv *httpserver.Server, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
+	return doJSON(t, srv, http.MethodPost, path, "", body)
+}
+
+func putJSON(t *testing.T, srv *httpserver.Server, path, bearer string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	return doJSON(t, srv, http.MethodPut, path, bearer, body)
+}
+
+func doJSON(t *testing.T, srv *httpserver.Server, method, path, bearer string, body any) *httptest.ResponseRecorder {
+	t.Helper()
 	b, err := json.Marshal(body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(b))
+	req := httptest.NewRequest(method, path, bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
 	rec := httptest.NewRecorder()
 	srv.Engine().ServeHTTP(rec, req)
 	return rec

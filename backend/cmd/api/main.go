@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/hosama-adem/twofold/backend/internal/audit"
 	"github.com/hosama-adem/twofold/backend/internal/auth"
 	"github.com/hosama-adem/twofold/backend/internal/platform/config"
 	"github.com/hosama-adem/twofold/backend/internal/platform/database"
@@ -46,9 +47,12 @@ func run() int {
 
 	users := user.NewRepository(pool)
 	sessions := session.NewRepository(pool)
+	audits := audit.NewRecorder(pool)
 	authSvc := auth.NewService(auth.ServiceDeps{
 		Users:      users,
 		Sessions:   sessions,
+		Audit:      audits,
+		Pool:       pool,
 		Tokens:     tokens,
 		SMS:        auth.LogSMSSender{Log: log},
 		Log:        log,

@@ -15,20 +15,21 @@ import (
 
 // Sentinel errors for callers above the repository.
 var (
-	ErrNotFound      = errors.New("user not found")
-	ErrPhoneTaken    = errors.New("phone number already registered")
-	ErrHandleTaken   = errors.New("handle already taken")
-	ErrInvalidPhone  = errors.New("phone number failed validation")
+	ErrNotFound     = errors.New("user not found")
+	ErrPhoneTaken   = errors.New("phone number already registered")
+	ErrHandleTaken  = errors.New("handle already taken")
+	ErrInvalidPhone = errors.New("phone number failed validation")
 )
 
 // Repository persists users through sqlc-generated queries.
 type Repository struct {
-	q *userdb.Queries
+	pool *pgxpool.Pool
+	q    *userdb.Queries
 }
 
 // NewRepository builds a user repository on a pgx pool.
 func NewRepository(pool *pgxpool.Pool) *Repository {
-	return &Repository{q: userdb.New(pool)}
+	return &Repository{pool: pool, q: userdb.New(pool)}
 }
 
 // CreateParams is the input for inserting a user row.
@@ -89,6 +90,27 @@ func (r *Repository) GetByPhone(ctx context.Context, phone string) (userdb.User,
 // MarkPhoneVerified stamps verification and activates pending users.
 func (r *Repository) MarkPhoneVerified(ctx context.Context, id uuid.UUID) (userdb.User, error) {
 	u, err := r.q.MarkPhoneVerified(ctx, id)
+	if err != nil {
+		return userdb.User{}, mapReadError(err)
+	}
+	return u, nil
+}
+
+// UpdatePinHash stores an argon2id PIN hash and clears lockout counters.
+func (r *Repository) UpdatePinHash(ctx context.Context, id uuid.UUID, pinHash string) (userdb.User, error) {
+	return r.updatePinHash(ctx, r.q, id, pinHash)
+}
+
+// UpdatePinHashTx is UpdatePinHash inside an existing transaction.
+func (r *Repository) UpdatePinHashTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, pinHash string) (userdb.User, error) {
+	return r.updatePinHash(ctx, r.q.WithTx(tx), id, pinHash)
+}
+
+func (r *Repository) updatePinHash(ctx context.Context, q *userdb.Queries, id uuid.UUID, pinHash string) (userdb.User, error) {
+	u, err := q.UpdateUserPinHash(ctx, userdb.UpdateUserPinHashParams{
+		ID:      id,
+		PinHash: &pinHash,
+	})
 	if err != nil {
 		return userdb.User{}, mapReadError(err)
 	}

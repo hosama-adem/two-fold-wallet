@@ -303,3 +303,40 @@ func (q *Queries) MarkPhoneVerified(ctx context.Context, id uuid.UUID) (User, er
 	)
 	return i, err
 }
+
+const updateUserPinHash = `-- name: UpdateUserPinHash :one
+UPDATE users
+SET
+    pin_hash = $2,
+    pin_failed_count = 0,
+    pin_locked_until = NULL,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, phone_e164, handle, display_name, password_hash, pin_hash, pin_failed_count, pin_locked_until, kyc_tier, phone_verified_at, status, created_at, updated_at
+`
+
+type UpdateUserPinHashParams struct {
+	ID      uuid.UUID `json:"id"`
+	PinHash *string   `json:"pin_hash"`
+}
+
+func (q *Queries) UpdateUserPinHash(ctx context.Context, arg UpdateUserPinHashParams) (User, error) {
+	row := q.db.QueryRow(ctx, updateUserPinHash, arg.ID, arg.PinHash)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.PhoneE164,
+		&i.Handle,
+		&i.DisplayName,
+		&i.PasswordHash,
+		&i.PinHash,
+		&i.PinFailedCount,
+		&i.PinLockedUntil,
+		&i.KycTier,
+		&i.PhoneVerifiedAt,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}

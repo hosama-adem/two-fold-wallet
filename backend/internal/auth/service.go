@@ -9,6 +9,9 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/hosama-adem/twofold/backend/internal/audit"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpx"
 	"github.com/hosama-adem/twofold/backend/internal/session"
 	"github.com/hosama-adem/twofold/backend/internal/user"
@@ -32,10 +35,12 @@ type systemClock struct{}
 
 func (systemClock) Now() time.Time { return time.Now().UTC() }
 
-// Service implements register / verify-phone / resend-otp / login / refresh / logout / me.
+// Service implements register / verify-phone / resend-otp / login / refresh / logout / me / pin.
 type Service struct {
 	users      *user.Repository
 	sessions   *session.Repository
+	audit      *audit.Recorder
+	pool       *pgxpool.Pool
 	tokens     *TokenSigner
 	sms        SMSSender
 	log        *slog.Logger
@@ -47,6 +52,8 @@ type Service struct {
 type ServiceDeps struct {
 	Users      *user.Repository
 	Sessions   *session.Repository
+	Audit      *audit.Recorder
+	Pool       *pgxpool.Pool
 	Tokens     *TokenSigner
 	SMS        SMSSender
 	Log        *slog.Logger
@@ -70,6 +77,8 @@ func NewService(deps ServiceDeps) *Service {
 	return &Service{
 		users:      deps.Users,
 		sessions:   deps.Sessions,
+		audit:      deps.Audit,
+		pool:       deps.Pool,
 		tokens:     deps.Tokens,
 		sms:        sms,
 		log:        log,
