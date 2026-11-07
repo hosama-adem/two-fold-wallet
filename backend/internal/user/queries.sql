@@ -32,6 +32,16 @@ SET
 WHERE id = $1
 RETURNING *;
 
+-- name: UpdateUserPinHash :one
+UPDATE users
+SET
+    pin_hash = $2,
+    pin_failed_count = 0,
+    pin_locked_until = NULL,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
 -- name: CreateOTP :one
 INSERT INTO otp_codes (
     id,

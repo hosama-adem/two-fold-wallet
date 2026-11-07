@@ -61,6 +61,7 @@ func newAuthServerWithLimiter(t *testing.T, sms *auth.RecordingSMSSender, clk au
 		Sessions:   sessions,
 		Tokens:     tokens,
 		Audit:      audits,
+		Pool:       pool,
 		SMS:        sms,
 		Log:        log,
 		RefreshTTL: 30 * 24 * time.Hour,
@@ -74,12 +75,25 @@ func newAuthServerWithLimiter(t *testing.T, sms *auth.RecordingSMSSender, clk au
 
 func postJSON(t *testing.T, srv *httpserver.Server, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
+	return doJSON(t, srv, http.MethodPost, path, "", body)
+}
+
+func putJSON(t *testing.T, srv *httpserver.Server, path, bearer string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	return doJSON(t, srv, http.MethodPut, path, bearer, body)
+}
+
+func doJSON(t *testing.T, srv *httpserver.Server, method, path, bearer string, body any) *httptest.ResponseRecorder {
+	t.Helper()
 	b, err := json.Marshal(body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(b))
+	req := httptest.NewRequest(method, path, bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
 	rec := httptest.NewRecorder()
 	srv.Engine().ServeHTTP(rec, req)
 	return rec

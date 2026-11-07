@@ -59,6 +59,7 @@ func run() int {
 		Sessions:   sessions,
 		Tokens:     tokens,
 		Audit:      audits,
+		Pool:       pool,
 		SMS:        auth.LogSMSSender{Log: log},
 		Log:        log,
 		RefreshTTL: cfg.RefreshTokenTTL,

@@ -33,6 +33,7 @@ func (h *Handler) Mount(e *gin.Engine) {
 	e.POST("/v1/auth/refresh", h.Refresh)
 	e.POST("/v1/auth/logout", h.Logout)
 	e.GET("/v1/me", h.RequireAccess(), h.Me)
+	e.PUT("/v1/me/pin", h.RequireAccess(), h.SetPIN)
 	e.GET("/v1/me/sessions", h.RequireAccess(), h.ListSessions)
 	e.DELETE("/v1/me/sessions/:id", h.RequireAccess(), h.RevokeSession)
 }
@@ -183,6 +184,30 @@ func (h *Handler) Me(c *gin.Context) {
 		return
 	}
 	out, err := h.svc.Me(c.Request.Context(), userID)
+	if err != nil {
+		httpx.WriteError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+// SetPIN handles PUT /v1/me/pin (set or change).
+func (h *Handler) SetPIN(c *gin.Context) {
+	userID, ok := UserIDFromContext(c)
+	if !ok {
+		httpx.WriteError(c, unauthorized("Missing or invalid Authorization header."))
+		return
+	}
+	var in SetPINInput
+	if err := httpx.BindJSON(c, &in); err != nil {
+		httpx.WriteError(c, err)
+		return
+	}
+	out, err := h.svc.SetOrChangePIN(c.Request.Context(), userID, in, PINMeta{
+		UserAgent: c.Request.UserAgent(),
+		IP:        c.ClientIP(),
+		RequestID: httpx.RequestIDFromContext(c),
+	})
 	if err != nil {
 		httpx.WriteError(c, err)
 		return

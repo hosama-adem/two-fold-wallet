@@ -19,10 +19,12 @@ const (
 	ActorSystem    = "system"
 	ActorAnonymous = "anonymous"
 
-	ActionLoginSuccess   = "login.success"
-	ActionLoginFailure   = "login.failure"
-	ActionSessionRevoke  = "session.revoke"
-	ActionSessionLogout  = "session.logout"
+	ActionLoginSuccess  = "login.success"
+	ActionLoginFailure  = "login.failure"
+	ActionSessionRevoke = "session.revoke"
+	ActionSessionLogout = "session.logout"
+	ActionPINSet        = "pin.set"
+	ActionPINChange     = "pin.change"
 )
 
 // Entry is one append-only audit event.
