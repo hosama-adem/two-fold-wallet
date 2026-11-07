@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/hosama-adem/twofold/backend/internal/audit"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpx"
 	"github.com/hosama-adem/twofold/backend/internal/session"
 	"github.com/hosama-adem/twofold/backend/internal/user"
@@ -48,13 +49,13 @@ type TokenResponse struct {
 type LoginMeta struct {
 	UserAgent string
 	IP        string
+	RequestID string
 }
 
 // Login authenticates an active verified user and opens a session.
 func (s *Service) Login(ctx context.Context, in LoginInput, meta LoginMeta) (TokenResponse, error) {
 	phone, err := NormalizePhone(in.Phone)
 	if err != nil {
-		// Validation failed shapes stay 422; do not treat as credential miss.
 		return TokenResponse{}, err
 	}
 	password := in.Password
@@ -62,10 +63,24 @@ func (s *Service) Login(ctx context.Context, in LoginInput, meta LoginMeta) (Tok
 		return TokenResponse{}, httpx.ValidationFailed("Password is required.")
 	}
 
+	failAudit := func(actor *uuid.UUID, kind string) {
+		s.auditBestEffort(ctx, audit.Entry{
+			ActorUserID: actor,
+			ActorKind:   kind,
+			Action:      audit.ActionLoginFailure,
+			TargetType:  "auth",
+			Summary:     map[string]any{"result": "invalid_credentials"},
+			IP:          meta.IP,
+			UserAgent:   meta.UserAgent,
+			RequestID:   meta.RequestID,
+		})
+	}
+
 	u, err := s.users.GetByPhone(ctx, phone)
 	if err != nil {
 		_, _ = VerifyPassword(dummyPasswordHash, password)
 		if errors.Is(err, user.ErrNotFound) {
+			failAudit(nil, audit.ActorAnonymous)
 			return TokenResponse{}, invalidCredentials()
 		}
 		return TokenResponse{}, err
@@ -73,13 +88,30 @@ func (s *Service) Login(ctx context.Context, in LoginInput, meta LoginMeta) (Tok
 
 	ok, verr := VerifyPassword(u.PasswordHash, password)
 	if verr != nil || !ok {
+		failAudit(&u.ID, audit.ActorUser)
 		return TokenResponse{}, invalidCredentials()
 	}
 	if u.Status != "active" || u.PhoneVerifiedAt == nil {
+		failAudit(&u.ID, audit.ActorUser)
 		return TokenResponse{}, invalidCredentials()
 	}
 
-	return s.issueSession(ctx, u.ID, uuid.Nil, meta)
+	tok, sessID, err := s.issueSession(ctx, u.ID, uuid.Nil, meta)
+	if err != nil {
+		return TokenResponse{}, err
+	}
+	s.auditBestEffort(ctx, audit.Entry{
+		ActorUserID: &u.ID,
+		ActorKind:   audit.ActorUser,
+		Action:      audit.ActionLoginSuccess,
+		TargetType:  "session",
+		TargetID:    &sessID,
+		Summary:     map[string]any{"result": "ok"},
+		IP:          meta.IP,
+		UserAgent:   meta.UserAgent,
+		RequestID:   meta.RequestID,
+	})
+	return tok, nil
 }
 
 // RefreshInput is the refresh request body.
@@ -136,18 +168,29 @@ type LogoutInput struct {
 }
 
 // Logout revokes the session bound to the refresh token.
-func (s *Service) Logout(ctx context.Context, in LogoutInput) error {
+func (s *Service) Logout(ctx context.Context, in LogoutInput, meta LoginMeta) error {
 	plain := strings.TrimSpace(in.RefreshToken)
 	if plain == "" {
 		return httpx.ValidationFailed("Refresh token is required.")
 	}
-	_, err := s.sessions.RevokeByRefreshHash(ctx, HashRefreshToken(plain))
+	sess, err := s.sessions.RevokeByRefreshHash(ctx, HashRefreshToken(plain))
 	if err != nil {
 		if errors.Is(err, session.ErrNotFound) {
 			return invalidRefresh()
 		}
 		return err
 	}
+	s.auditBestEffort(ctx, audit.Entry{
+		ActorUserID: &sess.UserID,
+		ActorKind:   audit.ActorUser,
+		Action:      audit.ActionSessionLogout,
+		TargetType:  "session",
+		TargetID:    &sess.ID,
+		Summary:     map[string]any{"via": "logout"},
+		IP:          meta.IP,
+		UserAgent:   meta.UserAgent,
+		RequestID:   meta.RequestID,
+	})
 	return nil
 }
 
@@ -186,10 +229,10 @@ func (s *Service) Me(ctx context.Context, userID uuid.UUID) (MeProfile, error) {
 	}, nil
 }
 
-func (s *Service) issueSession(ctx context.Context, userID, familyID uuid.UUID, meta LoginMeta) (TokenResponse, error) {
+func (s *Service) issueSession(ctx context.Context, userID, familyID uuid.UUID, meta LoginMeta) (TokenResponse, uuid.UUID, error) {
 	refreshPlain, refreshHash, err := NewRefreshToken()
 	if err != nil {
-		return TokenResponse{}, httpx.Internal("Could not issue refresh token.")
+		return TokenResponse{}, uuid.Nil, httpx.Internal("Could not issue refresh token.")
 	}
 	now := s.clock.Now()
 	sess, err := s.sessions.Create(ctx, session.CreateParams{
@@ -202,19 +245,19 @@ func (s *Service) issueSession(ctx context.Context, userID, familyID uuid.UUID, 
 		CreatedAt:   now,
 	})
 	if err != nil {
-		return TokenResponse{}, err
+		return TokenResponse{}, uuid.Nil, err
 	}
 
 	access, _, err := s.tokens.IssueAccessToken(userID, sess.ID)
 	if err != nil {
-		return TokenResponse{}, httpx.Internal("Could not issue access token.")
+		return TokenResponse{}, uuid.Nil, httpx.Internal("Could not issue access token.")
 	}
 	return TokenResponse{
 		AccessToken:  access,
 		RefreshToken: refreshPlain,
 		TokenType:    "Bearer",
 		ExpiresIn:    int64(s.tokens.AccessTTL() / time.Second),
-	}, nil
+	}, sess.ID, nil
 }
 
 func optionalString(s string) *string {

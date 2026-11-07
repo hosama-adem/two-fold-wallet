@@ -3,8 +3,32 @@ package migrate
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestSplitStatementsHonorsGooseBlocks(t *testing.T) {
+	body := `
+CREATE TABLE t (id INT);
+-- +goose StatementBegin
+CREATE FUNCTION f() RETURNS trigger AS $$
+BEGIN
+  RAISE EXCEPTION 'nope';
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+-- +goose StatementEnd
+CREATE TRIGGER tr BEFORE UPDATE ON t FOR EACH ROW EXECUTE PROCEDURE f();
+`
+	stmts := splitStatements(body)
+	if len(stmts) != 3 {
+		t.Fatalf("got %d stmts: %#v", len(stmts), stmts)
+	}
+	if !strings.Contains(stmts[1], "RAISE EXCEPTION") {
+		t.Fatalf("function body split incorrectly: %q", stmts[1])
+	}
+}
+
 
 func TestListMigrationsRejectsInvalidAndDuplicateVersions(t *testing.T) {
 	tests := []struct {

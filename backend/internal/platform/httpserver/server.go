@@ -37,6 +37,8 @@ func New(cfg config.Config, pool *pgxpool.Pool, log *slog.Logger, opts Options) 
 	}
 
 	engine := gin.New()
+	// Do not trust X-Forwarded-For / X-Real-IP unless proxies are configured later.
+	_ = engine.SetTrustedProxies(nil)
 	for _, mw := range httpx.Standard(httpx.WithLogger(log)) {
 		engine.Use(mw)
 	}

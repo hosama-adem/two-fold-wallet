@@ -39,9 +39,9 @@ func (systemClock) Now() time.Time { return time.Now().UTC() }
 type Service struct {
 	users      *user.Repository
 	sessions   *session.Repository
+	tokens     *TokenSigner
 	audit      *audit.Recorder
 	pool       *pgxpool.Pool
-	tokens     *TokenSigner
 	sms        SMSSender
 	log        *slog.Logger
 	clock      Clock
@@ -52,9 +52,9 @@ type Service struct {
 type ServiceDeps struct {
 	Users      *user.Repository
 	Sessions   *session.Repository
+	Tokens     *TokenSigner
 	Audit      *audit.Recorder
 	Pool       *pgxpool.Pool
-	Tokens     *TokenSigner
 	SMS        SMSSender
 	Log        *slog.Logger
 	RefreshTTL time.Duration
@@ -77,13 +77,22 @@ func NewService(deps ServiceDeps) *Service {
 	return &Service{
 		users:      deps.Users,
 		sessions:   deps.Sessions,
+		tokens:     deps.Tokens,
 		audit:      deps.Audit,
 		pool:       deps.Pool,
-		tokens:     deps.Tokens,
 		sms:        sms,
 		log:        log,
 		clock:      systemClock{},
 		refreshTTL: refreshTTL,
+	}
+}
+
+func (s *Service) auditBestEffort(ctx context.Context, e audit.Entry) {
+	if s.audit == nil {
+		return
+	}
+	if err := s.audit.Record(ctx, e); err != nil {
+		s.log.Error("audit record failed", "action", e.Action, "error", err)
 	}
 }
 

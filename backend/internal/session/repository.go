@@ -227,6 +227,36 @@ func (r *Repository) RevokeFamily(ctx context.Context, familyID uuid.UUID) error
 	return err
 }
 
+// ListActive returns non-revoked, non-expired sessions for a user.
+func (r *Repository) ListActive(ctx context.Context, userID uuid.UUID, now time.Time) ([]sessiondb.Session, error) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	rows, err := r.q.ListActiveSessionsByUser(ctx, sessiondb.ListActiveSessionsByUserParams{
+		UserID:    userID,
+		ExpiresAt: now,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if rows == nil {
+		return []sessiondb.Session{}, nil
+	}
+	return rows, nil
+}
+
+// RevokeForUser revokes a session owned by userID.
+func (r *Repository) RevokeForUser(ctx context.Context, sessionID, userID uuid.UUID) (sessiondb.Session, error) {
+	s, err := r.q.RevokeSessionForUser(ctx, sessiondb.RevokeSessionForUserParams{
+		ID:     sessionID,
+		UserID: userID,
+	})
+	if err != nil {
+		return sessiondb.Session{}, mapReadError(err)
+	}
+	return s, nil
+}
+
 func mapReadError(err error) error {
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound

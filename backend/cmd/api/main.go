@@ -12,6 +12,7 @@ import (
 	"github.com/hosama-adem/twofold/backend/internal/platform/config"
 	"github.com/hosama-adem/twofold/backend/internal/platform/database"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpserver"
+	"github.com/hosama-adem/twofold/backend/internal/platform/ratelimit"
 	"github.com/hosama-adem/twofold/backend/internal/session"
 	"github.com/hosama-adem/twofold/backend/internal/user"
 )
@@ -48,17 +49,22 @@ func run() int {
 	users := user.NewRepository(pool)
 	sessions := session.NewRepository(pool)
 	audits := audit.NewRecorder(pool)
+	limiter := ratelimit.NewMemory(ratelimit.Config{
+		Burst:  cfg.AuthRateLimitBurst,
+		Window: cfg.AuthRateLimitWindow,
+	})
+
 	authSvc := auth.NewService(auth.ServiceDeps{
 		Users:      users,
 		Sessions:   sessions,
+		Tokens:     tokens,
 		Audit:      audits,
 		Pool:       pool,
-		Tokens:     tokens,
 		SMS:        auth.LogSMSSender{Log: log},
 		Log:        log,
 		RefreshTTL: cfg.RefreshTokenTTL,
 	})
-	authHandler := auth.NewHandler(authSvc)
+	authHandler := auth.NewHandler(authSvc, limiter)
 
 	srv := httpserver.New(cfg, pool, log, httpserver.Options{Auth: authHandler})
 	if err := srv.Run(ctx); err != nil {
