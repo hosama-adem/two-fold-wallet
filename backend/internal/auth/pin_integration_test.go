@@ -210,6 +210,48 @@ func TestWeakPINRejected(t *testing.T) {
 	}
 }
 
+func TestChangePINRejectsSameAndMalformedOldPIN(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	sms := &auth.RecordingSMSSender{}
+	srv := newAuthServer(t, sms, nil)
+	phone := uniquePhone()
+	password := "correct-horse-1"
+	registerAndVerify(t, srv, sms, phone, password)
+	tok := decodeTokens(t, postJSON(t, srv, "/v1/auth/login", map[string]string{
+		"phone": phone, "password": password,
+	}))
+	set := putJSON(t, srv, "/v1/me/pin", tok.AccessToken, map[string]string{
+		"password": password, "pin": "4829",
+	})
+	if set.Code != http.StatusOK {
+		t.Fatalf("set status=%d body=%s", set.Code, set.Body.String())
+	}
+
+	same := putJSON(t, srv, "/v1/me/pin", tok.AccessToken, map[string]string{
+		"old_pin": "4829", "pin": "4829",
+	})
+	if same.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("same pin status=%d body=%s", same.Code, same.Body.String())
+	}
+
+	malformed := putJSON(t, srv, "/v1/me/pin", tok.AccessToken, map[string]string{
+		"old_pin": "12ab", "pin": "7391",
+	})
+	if malformed.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("malformed old_pin status=%d body=%s", malformed.Code, malformed.Body.String())
+	}
+	var p httpx.Problem
+	_ = json.Unmarshal(malformed.Body.Bytes(), &p)
+	if p.Code != "validation_failed" {
+		t.Fatalf("malformed old_pin code=%q", p.Code)
+	}
+	if p.TriesRemaining != nil {
+		t.Fatalf("malformed old_pin must not burn tries: %v", p.TriesRemaining)
+	}
+}
+
 func bytesContainAny(b []byte, needles ...string) bool {
 	s := string(b)
 	for _, n := range needles {

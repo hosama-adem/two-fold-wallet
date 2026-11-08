@@ -37,3 +37,8 @@ Two lines per merged day: what you learned, what surprised you.
 - Learned: a useful auth row is the actor, the action, the target, and the request id. `login.failure` always says `invalid_credentials`, even when the phone is unknown, so the log is not a second enumeration oracle. Password, OTP, refresh token, and PIN are not summary fields — `audit.Record` rejects those keys and the error names the field, never the value.
 - Surprised: the UPDATE/DELETE trigger is real (Postgres raises `audit_logs is append-only`), and it still misses `TRUNCATE`. Row triggers do not fire for it, so one statement could empty the trail.
 - Redo: append-only is three triggers (update, delete, truncate) plus the secret-key check in the recorder. A comment that says "please don't update" would not have survived the mutation test. `pin_set_before` stays, because that flag is the before/after, not the PIN.
+
+## feat: transaction PIN set and change
+
+- Learned: session proves identity; PIN proves intent. Set uses password step-up, change uses old PIN + the same lockout path money movement will call — wrong `old_pin` burns tries, malformed `old_pin` does not.
+- Surprised: weak-PIN rejection must stay *before* any argon2 work, or a timing gap between "weak" and "strong-but-wrong-password" becomes a free oracle.
