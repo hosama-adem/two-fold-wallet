@@ -23,7 +23,11 @@ func TestValidatePIN(t *testing.T) {
 		}
 	}
 
-	badFormat := []string{"", "12", "12345", "12a4", "12 4", "abcd"}
+	badFormat := []string{
+		"", "12", "12345", "12a4", "12 4", "abcd",
+		"١٢٣٤", // Arabic-Indic digits (multi-byte) — must not pass as "4 digits"
+		"1²34",
+	}
 	for _, pin := range badFormat {
 		if err := ValidatePIN(pin); err == nil {
 			t.Fatalf("ValidatePIN(%q) expected format rejection", pin)

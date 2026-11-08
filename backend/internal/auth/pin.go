@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"unicode"
 
 	"github.com/google/uuid"
 
@@ -68,6 +67,14 @@ func (s *Service) SetOrChangePIN(ctx context.Context, userID uuid.UUID, in SetPI
 		}
 		if in.OldPIN == "" {
 			return MessageResponse{}, httpx.ValidationFailed("Current PIN is required to change PIN.")
+		}
+		// Format-check old_pin before argon2 so garbage input stays a cheap
+		// validation_failed and does not burn lockout tries.
+		if err := validatePINFormat(in.OldPIN); err != nil {
+			return MessageResponse{}, httpx.ValidationFailed("Current PIN must be exactly 4 digits.")
+		}
+		if in.OldPIN == in.PIN {
+			return MessageResponse{}, httpx.ValidationFailed("New PIN must be different from the current PIN.")
 		}
 		// Same lockout path money movement will use — wrong old_pin burns tries.
 		if err := s.pins.Verify(ctx, userID, in.OldPIN, pin.Meta{
@@ -149,11 +156,14 @@ func ValidatePIN(pin string) error {
 }
 
 func validatePINFormat(pin string) error {
+	// Exactly four ASCII bytes '0'..'9'. Reject Unicode digits and multi-byte
+	// runes so length and character-class checks stay aligned.
 	if len(pin) != pinLength {
 		return httpx.ValidationFailed("PIN must be exactly 4 digits.")
 	}
-	for _, r := range pin {
-		if !unicode.IsDigit(r) {
+	for i := 0; i < pinLength; i++ {
+		c := pin[i]
+		if c < '0' || c > '9' {
 			return httpx.ValidationFailed("PIN must be exactly 4 digits.")
 		}
 	}

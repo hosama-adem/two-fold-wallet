@@ -304,6 +304,111 @@ func assertSummary(t *testing.T, requestID, raw string, want map[string]any) {
 	}
 }
 
+// TestPINSetChangeAuditTrail proves pin.set / pin.change land in audit_logs
+// with before/after flags only — never password, PIN, or pin_hash.
+func TestPINSetChangeAuditTrail(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+
+	pool := testutil.Postgres(t)
+	sms := &auth.RecordingSMSSender{}
+	srv := newAuthServer(t, sms, nil)
+
+	password := "correct-horse-1"
+	phone := uniquePhone()
+	registerAndVerify(t, srv, sms, phone, password)
+	tok := decodeTokens(t, postJSON(t, srv, "/v1/auth/login", map[string]string{
+		"phone": phone, "password": password,
+	}))
+
+	me := getJSON(t, srv, "/v1/me", tok.AccessToken)
+	if me.Code != http.StatusOK {
+		t.Fatalf("me status=%d body=%s", me.Code, me.Body.String())
+	}
+	var profile struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(me.Body.Bytes(), &profile); err != nil {
+		t.Fatal(err)
+	}
+
+	setID := "audit-pin-set-" + uuid.NewString()
+	changeID := "audit-pin-change-" + uuid.NewString()
+	oldPIN := "4829"
+	newPIN := "7391"
+
+	set := doAudited(t, srv, http.MethodPut, "/v1/me/pin", tok.AccessToken, setID, map[string]string{
+		"password": password,
+		"pin":      oldPIN,
+	})
+	if set.Code != http.StatusOK {
+		t.Fatalf("set status=%d body=%s", set.Code, set.Body.String())
+	}
+
+	change := doAudited(t, srv, http.MethodPut, "/v1/me/pin", tok.AccessToken, changeID, map[string]string{
+		"old_pin": oldPIN,
+		"pin":     newPIN,
+	})
+	if change.Code != http.StatusOK {
+		t.Fatalf("change status=%d body=%s", change.Code, change.Body.String())
+	}
+
+	rows := loadAuditRows(t, pool, []string{setID, changeID})
+	if len(rows) != 2 {
+		t.Fatalf("audit rows=%d", len(rows))
+	}
+
+	want := map[string]auditWant{
+		setID: {
+			action: "pin.set", actor: "user", userID: profile.ID,
+			targetType: "user", targetID: profile.ID,
+			summary: map[string]any{"pin_set_before": false, "pin_set_after": true},
+		},
+		changeID: {
+			action: "pin.change", actor: "user", userID: profile.ID,
+			targetType: "user", targetID: profile.ID,
+			summary: map[string]any{"pin_set_before": true, "pin_set_after": true},
+		},
+	}
+
+	secrets := map[string]string{
+		"password": password,
+		"old pin":  oldPIN,
+		"new pin":  newPIN,
+	}
+
+	for _, row := range rows {
+		exp, ok := want[row.requestID]
+		if !ok {
+			t.Fatalf("unexpected request_id %s", row.requestID)
+		}
+		for _, col := range []struct{ name, value string }{
+			{"summary", row.summary},
+			{"user_agent", row.userAgent},
+			{"ip", row.ip},
+			{"request_id", row.requestID},
+			{"action", row.action},
+		} {
+			for label, secret := range secrets {
+				if secret != "" && strings.Contains(col.value, secret) {
+					t.Fatalf("%s %s contains %s", row.requestID, col.name, label)
+				}
+			}
+		}
+		if row.action != exp.action || row.actor != exp.actor || row.targetType != exp.targetType {
+			t.Fatalf("%s: got action=%s actor=%s target=%s", row.requestID, row.action, row.actor, row.targetType)
+		}
+		if row.userID != exp.userID {
+			t.Fatalf("%s: actor_user_id=%s, want %s", row.requestID, row.userID, exp.userID)
+		}
+		if row.targetID != exp.targetID {
+			t.Fatalf("%s: target_id=%s, want %s", row.requestID, row.targetID, exp.targetID)
+		}
+		assertSummary(t, row.requestID, row.summary, exp.summary)
+	}
+}
+
 func doAudited(t *testing.T, srv *httpserver.Server, method, path, bearer, requestID string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	var rdr io.Reader
