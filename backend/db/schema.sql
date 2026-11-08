@@ -89,3 +89,30 @@ CREATE INDEX audit_logs_actor_user_id_idx ON audit_logs (actor_user_id);
 CREATE INDEX audit_logs_action_idx ON audit_logs (action);
 CREATE INDEX audit_logs_target_idx ON audit_logs (target_type, target_id);
 CREATE INDEX audit_logs_created_at_idx ON audit_logs (created_at DESC);
+
+-- Append-only. Row triggers miss TRUNCATE, so that statement has its own.
+CREATE OR REPLACE FUNCTION audit_logs_append_only()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RAISE EXCEPTION 'audit_logs is append-only'
+        USING ERRCODE = 'integrity_constraint_violation';
+    RETURN NULL;
+END;
+$$;
+
+CREATE TRIGGER audit_logs_no_update
+    BEFORE UPDATE ON audit_logs
+    FOR EACH ROW
+    EXECUTE PROCEDURE audit_logs_append_only();
+
+CREATE TRIGGER audit_logs_no_delete
+    BEFORE DELETE ON audit_logs
+    FOR EACH ROW
+    EXECUTE PROCEDURE audit_logs_append_only();
+
+CREATE TRIGGER audit_logs_no_truncate
+    BEFORE TRUNCATE ON audit_logs
+    FOR EACH STATEMENT
+    EXECUTE PROCEDURE audit_logs_append_only();
