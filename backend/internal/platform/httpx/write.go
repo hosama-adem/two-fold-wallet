@@ -38,7 +38,10 @@ func WriteError(c *gin.Context, err error) {
 		c.Header("Retry-After", strconv.Itoa(he.RetryAfterSeconds))
 	}
 
-	WriteProblem(c, newProblem(he.Status, he.Code, he.Title, detail, reqID))
+	p := newProblem(he.Status, he.Code, he.Title, detail, reqID)
+	p.TriesRemaining = he.TriesRemaining
+	p.LockedUntil = he.LockedUntil
+	WriteProblem(c, p)
 }
 
 // WriteProblem writes an already-built problem document.

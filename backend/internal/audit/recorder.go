@@ -2,7 +2,6 @@ package audit
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -25,6 +24,8 @@ const (
 	ActionSessionLogout = "session.logout"
 	ActionPINSet        = "pin.set"
 	ActionPINChange     = "pin.change"
+	ActionPINFailure    = "pin.failure"
+	ActionPINLockout    = "pin.lockout"
 )
 
 // Entry is one append-only audit event.
@@ -52,6 +53,8 @@ func NewRecorder(pool *pgxpool.Pool) *Recorder {
 }
 
 // Record inserts an audit row. Failures are returned to the caller (never swallow silently at this layer).
+// ErrSecretSummary means a password, OTP, refresh token, PIN, or similar field was in the summary.
+// That row is not written.
 func (r *Recorder) Record(ctx context.Context, e Entry) error {
 	return r.record(ctx, r.q, e)
 }
@@ -74,13 +77,9 @@ func (r *Recorder) record(ctx context.Context, q *auditdb.Queries, e Entry) erro
 			kind = ActorAnonymous
 		}
 	}
-	summary := e.Summary
-	if summary == nil {
-		summary = map[string]any{}
-	}
-	raw, err := json.Marshal(summary)
+	raw, err := prepareSummary(e.Summary)
 	if err != nil {
-		return fmt.Errorf("audit summary: %w", err)
+		return err
 	}
 	var targetType *string
 	if e.TargetType != "" {

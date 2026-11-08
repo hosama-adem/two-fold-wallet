@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/hosama-adem/twofold/backend/internal/audit"
+	"github.com/hosama-adem/twofold/backend/internal/pin"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpx"
 	"github.com/hosama-adem/twofold/backend/internal/session"
 	"github.com/hosama-adem/twofold/backend/internal/user"
@@ -41,6 +42,7 @@ type Service struct {
 	sessions   *session.Repository
 	tokens     *TokenSigner
 	audit      *audit.Recorder
+	pins       *pin.Service
 	pool       *pgxpool.Pool
 	sms        SMSSender
 	log        *slog.Logger
@@ -54,6 +56,7 @@ type ServiceDeps struct {
 	Sessions   *session.Repository
 	Tokens     *TokenSigner
 	Audit      *audit.Recorder
+	Pins       *pin.Service // optional; built automatically when nil
 	Pool       *pgxpool.Pool
 	SMS        SMSSender
 	Log        *slog.Logger
@@ -74,11 +77,21 @@ func NewService(deps ServiceDeps) *Service {
 	if refreshTTL <= 0 {
 		refreshTTL = 30 * 24 * time.Hour
 	}
+	pins := deps.Pins
+	if pins == nil {
+		pins = pin.New(pin.Deps{
+			Users: deps.Users,
+			Audit: deps.Audit,
+			Match: VerifyPIN,
+			Log:   log,
+		})
+	}
 	return &Service{
 		users:      deps.Users,
 		sessions:   deps.Sessions,
 		tokens:     deps.Tokens,
 		audit:      deps.Audit,
+		pins:       pins,
 		pool:       deps.Pool,
 		sms:        sms,
 		log:        log,
@@ -86,6 +99,9 @@ func NewService(deps ServiceDeps) *Service {
 		refreshTTL: refreshTTL,
 	}
 }
+
+// PIN returns the transaction-PIN verifier for money-moving handlers (FR-ID-7).
+func (s *Service) PIN() *pin.Service { return s.pins }
 
 func (s *Service) auditBestEffort(ctx context.Context, e audit.Entry) {
 	if s.audit == nil {
@@ -101,6 +117,9 @@ func (s *Service) WithClock(c Clock) *Service {
 	s.clock = c
 	if s.tokens != nil {
 		s.tokens.WithClock(c)
+	}
+	if s.pins != nil {
+		s.pins.WithClock(c)
 	}
 	return s
 }

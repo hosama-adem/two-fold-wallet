@@ -75,6 +75,78 @@ func TestSetAndChangePIN(t *testing.T) {
 	if p.Code != "invalid_pin" {
 		t.Fatalf("code=%q", p.Code)
 	}
+	if p.TriesRemaining == nil || *p.TriesRemaining != 4 {
+		t.Fatalf("tries_remaining=%v want 4", p.TriesRemaining)
+	}
+}
+
+func TestChangePINLockoutAfterFiveFailures(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	sms := &auth.RecordingSMSSender{}
+	srv := newAuthServer(t, sms, nil)
+	phone := uniquePhone()
+	password := "correct-horse-1"
+	registerAndVerify(t, srv, sms, phone, password)
+	tok := decodeTokens(t, postJSON(t, srv, "/v1/auth/login", map[string]string{
+		"phone": phone, "password": password,
+	}))
+	set := putJSON(t, srv, "/v1/me/pin", tok.AccessToken, map[string]string{
+		"password": password, "pin": "4829",
+	})
+	if set.Code != http.StatusOK {
+		t.Fatalf("set status=%d body=%s", set.Code, set.Body.String())
+	}
+
+	for i := 1; i <= 4; i++ {
+		rec := putJSON(t, srv, "/v1/me/pin", tok.AccessToken, map[string]string{
+			"old_pin": "0001", "pin": "7391",
+		})
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("fail %d status=%d body=%s", i, rec.Code, rec.Body.String())
+		}
+		var p httpx.Problem
+		_ = json.Unmarshal(rec.Body.Bytes(), &p)
+		if p.Code != "invalid_pin" {
+			t.Fatalf("fail %d code=%q", i, p.Code)
+		}
+		want := 5 - i
+		if p.TriesRemaining == nil || *p.TriesRemaining != want {
+			t.Fatalf("fail %d tries=%v want %d", i, p.TriesRemaining, want)
+		}
+	}
+
+	fifth := putJSON(t, srv, "/v1/me/pin", tok.AccessToken, map[string]string{
+		"old_pin": "0001", "pin": "7391",
+	})
+	if fifth.Code != http.StatusForbidden {
+		t.Fatalf("5th status=%d body=%s", fifth.Code, fifth.Body.String())
+	}
+	var locked httpx.Problem
+	_ = json.Unmarshal(fifth.Body.Bytes(), &locked)
+	if locked.Code != "pin_locked" {
+		t.Fatalf("code=%q", locked.Code)
+	}
+	if locked.LockedUntil == nil {
+		t.Fatal("missing locked_until")
+	}
+
+	// While locked: another attempt must not change tries / must stay pin_locked.
+	again := putJSON(t, srv, "/v1/me/pin", tok.AccessToken, map[string]string{
+		"old_pin": "4829", "pin": "7391",
+	})
+	if again.Code != http.StatusForbidden {
+		t.Fatalf("locked retry status=%d body=%s", again.Code, again.Body.String())
+	}
+	var againP httpx.Problem
+	_ = json.Unmarshal(again.Body.Bytes(), &againP)
+	if againP.Code != "pin_locked" {
+		t.Fatalf("locked retry code=%q", againP.Code)
+	}
+	if againP.TriesRemaining != nil {
+		t.Fatalf("locked retry must not advertise tries: %v", againP.TriesRemaining)
+	}
 }
 
 func TestSetPINRequiresAuthAndPassword(t *testing.T) {

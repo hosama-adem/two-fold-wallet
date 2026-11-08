@@ -1,6 +1,9 @@
 package httpx
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 const (
 	problemTypeBase = "https://twofold.dev/errors/"
@@ -9,12 +12,14 @@ const (
 
 // Problem is an RFC 9457 problem details document.
 type Problem struct {
-	Type      string `json:"type"`
-	Title     string `json:"title"`
-	Status    int    `json:"status"`
-	Detail    string `json:"detail,omitempty"`
-	Code      string `json:"code"`
-	RequestID string `json:"request_id,omitempty"`
+	Type           string     `json:"type"`
+	Title          string     `json:"title"`
+	Status         int        `json:"status"`
+	Detail         string     `json:"detail,omitempty"`
+	Code           string     `json:"code"`
+	RequestID      string     `json:"request_id,omitempty"`
+	TriesRemaining *int       `json:"tries_remaining,omitempty"`
+	LockedUntil    *time.Time `json:"locked_until,omitempty"`
 }
 
 func problemType(code string) string {

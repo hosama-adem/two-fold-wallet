@@ -2,10 +2,11 @@ package user_test
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
+	"fmt"
+	"math/big"
 	"testing"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/hosama-adem/twofold/backend/internal/platform/database/testutil"
 	"github.com/hosama-adem/twofold/backend/internal/user"
@@ -17,11 +18,10 @@ func TestCreateRejectsDuplicatePhone(t *testing.T) {
 	}
 
 	pool := testutil.Postgres(t)
-	truncateUsers(t, pool)
 	repo := user.NewRepository(pool)
 	ctx := context.Background()
 
-	phone := "+251911223344"
+	phone := uniquePhone()
 	first, err := repo.Create(ctx, user.CreateParams{
 		PhoneE164:    phone,
 		DisplayName:  "Selam",
@@ -50,7 +50,6 @@ func TestCreateRejectsInvalidPhone(t *testing.T) {
 	}
 
 	pool := testutil.Postgres(t)
-	truncateUsers(t, pool)
 	repo := user.NewRepository(pool)
 
 	_, err := repo.Create(context.Background(), user.CreateParams{
@@ -69,12 +68,12 @@ func TestGetByPhoneAndMarkVerified(t *testing.T) {
 	}
 
 	pool := testutil.Postgres(t)
-	truncateUsers(t, pool)
 	repo := user.NewRepository(pool)
 	ctx := context.Background()
 
+	phone := uniquePhone()
 	created, err := repo.Create(ctx, user.CreateParams{
-		PhoneE164:    "+251911000111",
+		PhoneE164:    phone,
 		DisplayName:  "Dawit",
 		PasswordHash: "argon2id-placeholder",
 	})
@@ -82,7 +81,7 @@ func TestGetByPhoneAndMarkVerified(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	got, err := repo.GetByPhone(ctx, "+251911000111")
+	got, err := repo.GetByPhone(ctx, phone)
 	if err != nil {
 		t.Fatalf("get by phone: %v", err)
 	}
@@ -105,16 +104,12 @@ func TestGetByPhoneAndMarkVerified(t *testing.T) {
 	}
 }
 
-func truncateUsers(t *testing.T, pool *pgxpool.Pool) {
-	t.Helper()
-	_, err := pool.Exec(context.Background(), `
-		DO $$
-		BEGIN
-			IF to_regclass('public.users') IS NOT NULL THEN
-				TRUNCATE otp_codes, users RESTART IDENTITY CASCADE;
-			END IF;
-		END $$;`)
+// uniquePhone avoids TRUNCATE. audit_logs references users and refuses
+// UPDATE, DELETE, and TRUNCATE, so CASCADE cleanup cannot wipe the table.
+func uniquePhone() string {
+	n, err := rand.Int(rand.Reader, big.NewInt(100_000_000))
 	if err != nil {
-		t.Fatalf("truncate: %v", err)
+		panic(err)
 	}
+	return fmt.Sprintf("+2519%08d", n.Int64())
 }

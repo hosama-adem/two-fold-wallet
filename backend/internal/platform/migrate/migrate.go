@@ -324,11 +324,41 @@ func splitStatements(body string) []string {
 func splitSimpleStatements(body string) []string {
 	var out []string
 	for _, stmt := range strings.Split(body, ";") {
-		stmt = strings.TrimSpace(stmt)
-		if stmt == "" || strings.HasPrefix(stmt, "--") {
+		// A leading comment must not hide the SQL that follows it.
+		// 00004 is only a CREATE TRIGGER under a header comment; skipping
+		// that chunk recorded the migration and left TRUNCATE allowed.
+		stmt = strings.TrimSpace(stripLeadingComments(stmt))
+		if stmt == "" {
 			continue
 		}
 		out = append(out, stmt)
 	}
 	return out
+}
+
+// stripLeadingComments drops full-line -- comments and /* */ blocks that
+// sit in front of a statement. A line comment with no newline and no SQL
+// after it drops the whole chunk.
+func stripLeadingComments(stmt string) string {
+	for {
+		stmt = strings.TrimSpace(stmt)
+		switch {
+		case stmt == "":
+			return ""
+		case strings.HasPrefix(stmt, "--"):
+			newline := strings.IndexByte(stmt, '\n')
+			if newline < 0 {
+				return ""
+			}
+			stmt = stmt[newline+1:]
+		case strings.HasPrefix(stmt, "/*"):
+			end := strings.Index(stmt, "*/")
+			if end < 0 {
+				return ""
+			}
+			stmt = stmt[end+2:]
+		default:
+			return stmt
+		}
+	}
 }

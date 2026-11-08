@@ -45,6 +45,8 @@ CREATE TRIGGER audit_logs_no_delete
     FOR EACH ROW
     EXECUTE PROCEDURE audit_logs_append_only();
 
+-- TRUNCATE does not fire the row triggers above. Migration 00004 rejects it.
+
 -- +goose Down
 DROP TRIGGER IF EXISTS audit_logs_no_delete ON audit_logs;
 DROP TRIGGER IF EXISTS audit_logs_no_update ON audit_logs;
