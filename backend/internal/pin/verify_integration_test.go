@@ -2,14 +2,18 @@ package pin_test
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/hosama-adem/twofold/backend/internal/audit"
 	"github.com/hosama-adem/twofold/backend/internal/auth"
 	"github.com/hosama-adem/twofold/backend/internal/pin"
@@ -22,7 +26,7 @@ type fixedClock struct{ t time.Time }
 
 func (c *fixedClock) Now() time.Time { return c.t }
 
-func setupPINUser(t *testing.T, rawPIN string) (*pin.Service, *user.Repository, *audit.Recorder, uuid.UUID, *fixedClock) {
+func setupPINUser(t *testing.T, rawPIN string) (*pin.Service, *user.Repository, *pgxpool.Pool, uuid.UUID, *fixedClock) {
 	t.Helper()
 	pool := testutil.Postgres(t)
 	users := user.NewRepository(pool)
@@ -54,7 +58,7 @@ func setupPINUser(t *testing.T, rawPIN string) (*pin.Service, *user.Repository, 
 		Log:   log,
 		Clock: clk,
 	})
-	return svc, users, audits, u.ID, clk
+	return svc, users, pool, u.ID, clk
 }
 
 func ctxBackground() context.Context { return context.Background() }
@@ -133,14 +137,48 @@ func TestVerifyWhileLockedDoesNotBurnTries(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration")
 	}
-	svc, users, _, userID, clk := setupPINUser(t, "4829")
+	pool := testutil.Postgres(t)
+	users := user.NewRepository(pool)
+	audits := audit.NewRecorder(pool)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	clk := &fixedClock{t: time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)}
+
+	const good = "4829"
+	hash, err := auth.HashPIN(good)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := users.Create(ctxBackground(), user.CreateParams{
+		PhoneE164:    uniquePhone(),
+		DisplayName:  "PIN Locked",
+		PasswordHash: "x",
+		Status:       "active",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := users.UpdatePinHash(ctxBackground(), u.ID, hash); err != nil {
+		t.Fatal(err)
+	}
+
+	var matchCalls atomic.Int32
+	svc := pin.New(pin.Deps{
+		Users: users,
+		Audit: audits,
+		Match: func(encoded, raw string) (bool, error) {
+			matchCalls.Add(1)
+			return auth.VerifyPIN(encoded, raw)
+		},
+		Log:   log,
+		Clock: clk,
+	})
 	ctx := ctxBackground()
 	meta := pin.Meta{RequestID: "req-locked"}
 
 	for i := 0; i < pin.MaxFailures; i++ {
-		_ = svc.Verify(ctx, userID, "0001", meta)
+		_ = svc.Verify(ctx, u.ID, "0001", meta)
 	}
-	before, err := users.GetByID(ctx, userID)
+	before, err := users.GetByID(ctx, u.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,10 +187,11 @@ func TestVerifyWhileLockedDoesNotBurnTries(t *testing.T) {
 	}
 	lockUntil := *before.PinLockedUntil
 	failed := before.PinFailedCount
+	callsAfterLockSetup := matchCalls.Load()
 
 	// Still inside the lock window — even the correct PIN must be rejected,
-	// and the counter must not move (no argon2 burn / no extra tries).
-	err = svc.Verify(ctx, userID, "4829", meta)
+	// with no argon2 (Match) and no counter bump.
+	err = svc.Verify(ctx, u.ID, good, meta)
 	he, ok := httpx.AsError(err)
 	if !ok || he.Code != "pin_locked" {
 		t.Fatalf("correct-while-locked: %v", err)
@@ -160,8 +199,11 @@ func TestVerifyWhileLockedDoesNotBurnTries(t *testing.T) {
 	if he.LockedUntil == nil || !he.LockedUntil.Equal(lockUntil.UTC()) {
 		t.Fatalf("locked_until changed: got %v want %v", he.LockedUntil, lockUntil)
 	}
+	if matchCalls.Load() != callsAfterLockSetup {
+		t.Fatalf("Match called while locked: before=%d after=%d", callsAfterLockSetup, matchCalls.Load())
+	}
 
-	after, err := users.GetByID(ctx, userID)
+	after, err := users.GetByID(ctx, u.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,5 +300,94 @@ func TestVerifyConcurrentFailuresReachLock(t *testing.T) {
 	}
 	if u.PinFailedCount < int32(pin.MaxFailures) {
 		t.Fatalf("failed_count=%d want >= %d", u.PinFailedCount, pin.MaxFailures)
+	}
+}
+
+func TestVerifyFailureAndLockoutAudit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	const good = "4829"
+	const wrong = "7391"
+	svc, _, pool, userID, _ := setupPINUser(t, good)
+	ctx := ctxBackground()
+
+	failIDs := make([]string, 0, pin.MaxFailures)
+	for i := 0; i < pin.MaxFailures; i++ {
+		id := "pin-fail-" + uuid.NewString()
+		failIDs = append(failIDs, id)
+		_ = svc.Verify(ctx, userID, wrong, pin.Meta{
+			IP:        "10.0.0.8",
+			UserAgent: "pin-audit-test",
+			RequestID: id,
+		})
+	}
+
+	// Locked retry must not write another failure/lockout row.
+	lockedRetryID := "pin-locked-retry-" + uuid.NewString()
+	err := svc.Verify(ctx, userID, good, pin.Meta{RequestID: lockedRetryID})
+	if he, ok := httpx.AsError(err); !ok || he.Code != "pin_locked" {
+		t.Fatalf("locked retry: %v", err)
+	}
+
+	rows, err := pool.Query(ctx, `
+		SELECT action, summary::text, request_id
+		FROM audit_logs
+		WHERE request_id = ANY($1::text[])
+		ORDER BY created_at ASC
+	`, append(failIDs, lockedRetryID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	type auditHit struct {
+		action    string
+		summary   string
+		requestID string
+	}
+	var hits []auditHit
+	for rows.Next() {
+		var h auditHit
+		if err := rows.Scan(&h.action, &h.summary, &h.requestID); err != nil {
+			t.Fatal(err)
+		}
+		hits = append(hits, h)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	var failures, lockouts int
+	for _, h := range hits {
+		if h.requestID == lockedRetryID {
+			t.Fatalf("locked retry must not audit: %+v", h)
+		}
+		if strings.Contains(h.summary, wrong) || strings.Contains(h.summary, good) {
+			t.Fatalf("PIN leaked into audit summary: %s", h.summary)
+		}
+		var summary map[string]any
+		if err := json.Unmarshal([]byte(h.summary), &summary); err != nil {
+			t.Fatal(err)
+		}
+		for _, secretKey := range []string{"pin", "old_pin", "pin_hash", "password"} {
+			if _, ok := summary[secretKey]; ok {
+				t.Fatalf("secret key %q in summary %s", secretKey, h.summary)
+			}
+		}
+		switch h.action {
+		case audit.ActionPINFailure:
+			failures++
+		case audit.ActionPINLockout:
+			lockouts++
+		default:
+			t.Fatalf("unexpected action %q", h.action)
+		}
+	}
+	if failures != pin.MaxFailures {
+		t.Fatalf("pin.failure rows=%d want %d", failures, pin.MaxFailures)
+	}
+	if lockouts != 1 {
+		t.Fatalf("pin.lockout rows=%d want 1", lockouts)
 	}
 }
