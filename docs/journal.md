@@ -42,3 +42,8 @@ Two lines per merged day: what you learned, what surprised you.
 
 - Learned: session proves identity; PIN proves intent. Set uses password step-up, change uses old PIN + the same lockout path money movement will call — wrong `old_pin` burns tries, malformed `old_pin` does not.
 - Surprised: weak-PIN rejection must stay *before* any argon2 work, or a timing gap between "weak" and "strong-but-wrong-password" becomes a free oracle.
+
+## feat: PIN lockout and verify helper
+
+- Learned: PIN lockout must not soft-lock login — `pin.Verify` only gates money movement. Atomic `UPDATE … RETURNING` keeps concurrent wrong verifies from skipping the 5th-failure lock.
+- Surprised: while locked, skipping argon2 is not just a perf win — a Match call would still burn CPU for an attacker who already knows the account is locked.
