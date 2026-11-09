@@ -9,6 +9,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/hosama-adem/twofold/backend/internal/audit"
@@ -32,6 +34,13 @@ type Clock interface {
 	Now() time.Time
 }
 
+// WalletProvisioner opens the user's ETB liability account and wallet row
+// inside the verification transaction. A verified user without a wallet is
+// not a valid state, so verification refuses to commit when this is nil.
+type WalletProvisioner interface {
+	ProvisionETB(ctx context.Context, tx pgx.Tx, userID uuid.UUID) error
+}
+
 type systemClock struct{}
 
 func (systemClock) Now() time.Time { return time.Now().UTC() }
@@ -44,6 +53,7 @@ type Service struct {
 	audit      *audit.Recorder
 	pins       *pin.Service
 	pool       *pgxpool.Pool
+	wallets    WalletProvisioner
 	sms        SMSSender
 	log        *slog.Logger
 	clock      Clock
@@ -58,6 +68,7 @@ type ServiceDeps struct {
 	Audit      *audit.Recorder
 	Pins       *pin.Service // optional; built automatically when nil
 	Pool       *pgxpool.Pool
+	Wallets    WalletProvisioner
 	SMS        SMSSender
 	Log        *slog.Logger
 	RefreshTTL time.Duration
@@ -93,6 +104,7 @@ func NewService(deps ServiceDeps) *Service {
 		audit:      deps.Audit,
 		pins:       pins,
 		pool:       deps.Pool,
+		wallets:    deps.Wallets,
 		sms:        sms,
 		log:        log,
 		clock:      systemClock{},
@@ -243,11 +255,40 @@ func (s *Service) VerifyPhone(ctx context.Context, in VerifyPhoneInput) (Message
 		_, _ = s.users.IncrementOTPAttempts(ctx, otp.ID)
 		return MessageResponse{}, httpx.ValidationFailed(genericVerifyFail)
 	}
+	if s.pool == nil || s.wallets == nil {
+		return MessageResponse{}, httpx.Internal("Phone verification is not configured.")
+	}
 
-	if _, err := s.users.ConsumeOTP(ctx, otp.ID); err != nil {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return MessageResponse{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	locked, err := s.users.GetByIDForUpdate(ctx, tx, u.ID)
+	if err != nil {
+		if errors.Is(err, user.ErrNotFound) {
+			return MessageResponse{}, httpx.ValidationFailed(genericVerifyFail)
+		}
+		return MessageResponse{}, err
+	}
+	if locked.Status != "pending_verification" {
 		return MessageResponse{}, httpx.ValidationFailed(genericVerifyFail)
 	}
-	if _, err := s.users.MarkPhoneVerified(ctx, u.ID); err != nil {
+
+	if _, err := s.users.ConsumeOTPTx(ctx, tx, otp.ID); err != nil {
+		if errors.Is(err, user.ErrNotFound) {
+			return MessageResponse{}, httpx.ValidationFailed(genericVerifyFail)
+		}
+		return MessageResponse{}, err
+	}
+	if _, err := s.users.MarkPhoneVerifiedTx(ctx, tx, u.ID); err != nil {
+		return MessageResponse{}, err
+	}
+	if err := s.wallets.ProvisionETB(ctx, tx, u.ID); err != nil {
+		return MessageResponse{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return MessageResponse{}, err
 	}
 	return MessageResponse{Message: "Phone verified."}, nil
