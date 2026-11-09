@@ -52,3 +52,8 @@ Two lines per merged day: what you learned, what surprised you.
 
 - Learned: a wallet is a liability. Crediting it means Twofold owes the user more. A posting keeps a direction and a positive `amount_minor`, so a café credited 300 and debited a fee of 3 is two readable lines, and `sum(debits) = sum(credits)` compares two positive totals.
 - Surprised: Postgres already rejects a negative cached balance when `allow_negative` is false, and that flag defaults to false. The five system accounts opt in, because a fee reversal or a provider settlement can cross zero before the books catch up. The balanced-journal trigger is still absent on purpose. That check belongs to the posting engine.
+
+## feat: posting engine that only accepts balanced journals
+
+- Learned: `ledger.Post` is the only writer — `NewMoney` / `NewLine` / `NewJournal` hide the fields so callers cannot assemble an unbalanced journal without hitting `ErrEmptyJournal`, `ErrCurrencyMismatch`, or `ErrUnbalanced` first. Postgres still has the last word: a deferred constraint trigger rejects the same mistake at `COMMIT` even if someone inserts with raw SQL.
+- Surprised: an immediate trigger makes double-entry impossible (the first line always looks unbalanced). `DEFERRABLE INITIALLY DEFERRED` is what lets you insert debit then credit inside one transaction and only check when the thought is finished.

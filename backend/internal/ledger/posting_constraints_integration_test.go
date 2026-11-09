@@ -19,6 +19,10 @@ func TestPostingRejectsNonPositiveAmounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	clearing, err := ledgerdb.New(pool).GetAccountByCode(ctx, ledger.CodeProviderClearingTelebirr)
+	if err != nil {
+		t.Fatal(err)
+	}
 	journalID := insertAdjustmentJournal(t, ctx, pool)
 
 	for _, amount := range []int64{0, -1, ledger.MaxAmountMinor + 1} {
@@ -26,8 +30,20 @@ func TestPostingRejectsNonPositiveAmounts(t *testing.T) {
 		requireViolation(t, err, "23514", "postings_amount_positive")
 	}
 
-	if err := insertPosting(ctx, pool, journalID, account.ID, "credit", ledger.MaxAmountMinor, account.Currency); err != nil {
-		t.Fatalf("ceiling amount should insert: %v", err)
+	// Ceiling amount is legal; pair it so the deferred balance trigger passes.
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if err := insertPostingTx(ctx, tx, journalID, clearing.ID, "debit", ledger.MaxAmountMinor, clearing.Currency); err != nil {
+		t.Fatalf("ceiling debit: %v", err)
+	}
+	if err := insertPostingTx(ctx, tx, journalID, account.ID, "credit", ledger.MaxAmountMinor, account.Currency); err != nil {
+		t.Fatalf("ceiling credit: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("ceiling journal commit: %v", err)
 	}
 }
 
@@ -65,25 +81,6 @@ func TestPostingCurrencyMustMatchAccount(t *testing.T) {
 	requireViolation(t, err, "23503", "postings_account_currency_fk")
 }
 
-func TestUnbalancedJournalStillInserts(t *testing.T) {
-	if testing.Short() {
-		t.Skip("integration")
-	}
-	pool := testutil.Postgres(t)
-	ctx := context.Background()
-	account, err := ledgerdb.New(pool).GetAccountByCode(ctx, ledger.CodePayoutsPending)
-	if err != nil {
-		t.Fatal(err)
-	}
-	journalID := insertAdjustmentJournal(t, ctx, pool)
-
-	// One debit and no credit. The deferred balance trigger is the posting
-	// engine's job; this migration must not pretend to enforce it.
-	if err := insertPosting(ctx, pool, journalID, account.ID, "debit", 50, account.Currency); err != nil {
-		t.Fatalf("one-line journal inserted: %v", err)
-	}
-}
-
 func TestCafeFeeStaysTwoPositiveLines(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration")
@@ -101,17 +98,26 @@ func TestCafeFeeStaysTwoPositiveLines(t *testing.T) {
 	}
 
 	journalID := insertAdjustmentJournal(t, ctx, pool)
-	if err := insertPosting(ctx, pool, journalID, selam, "debit", 300, ledger.CurrencyETB); err != nil {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := insertPosting(ctx, pool, journalID, cafe, "debit", 3, ledger.CurrencyETB); err != nil {
+	defer tx.Rollback(ctx)
+
+	if err := insertPostingTx(ctx, tx, journalID, selam, "debit", 300, ledger.CurrencyETB); err != nil {
 		t.Fatal(err)
 	}
-	if err := insertPosting(ctx, pool, journalID, cafe, "credit", 300, ledger.CurrencyETB); err != nil {
+	if err := insertPostingTx(ctx, tx, journalID, cafe, "debit", 3, ledger.CurrencyETB); err != nil {
 		t.Fatal(err)
 	}
-	if err := insertPosting(ctx, pool, journalID, fee.ID, "credit", 3, ledger.CurrencyETB); err != nil {
+	if err := insertPostingTx(ctx, tx, journalID, cafe, "credit", 300, ledger.CurrencyETB); err != nil {
 		t.Fatal(err)
+	}
+	if err := insertPostingTx(ctx, tx, journalID, fee.ID, "credit", 3, ledger.CurrencyETB); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("balanced café journal: %v", err)
 	}
 
 	got, err := q.ListPostingsByJournalID(ctx, journalID)

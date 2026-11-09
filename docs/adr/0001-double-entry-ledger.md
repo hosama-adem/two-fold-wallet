@@ -68,7 +68,7 @@ The database enforces the part it can see without looking at the whole journal:
 - A journal is a reversal exactly when `reverses_journal_id` is set, and that
   column is unique, so an original journal can be reversed once.
 
-`ledger.Post` does not exist yet. When it does, a debit raises a debit-normal
+`ledger.Post` is the only writer of journals. A debit raises a debit-normal
 balance and a credit raises a credit-normal balance. Same side means the
 balance goes up; the opposite side means it goes down.
 
@@ -101,14 +101,13 @@ on both sides.
   (`provider_clearing:telebirr`, `provider_clearing:chapa`, `payouts_pending`,
   `fee_revenue`, `suspense`) exist as soon as migrations finish, with stable
   ids, in ETB.
-- This migration does **not** reject an unbalanced journal. A deferred
-  constraint that requires `sum(debits) = sum(credits)` arrives with the
-  posting engine. Immutability triggers arrive with reversals. `wallets` and
-  the foreign keys from `transactions.from_wallet_id` / `to_wallet_id` arrive
-  with the wallets API.
-- `balance_after_minor` and `account_version` are required on every posting so
-  a line cannot omit the running balance, but nothing in this change computes
-  them. The posting engine is the writer.
+- Unbalanced journals are rejected at `COMMIT` by the deferred constraint
+  trigger `postings_journal_balanced` (migration 00010). Immutability
+  triggers arrive with reversals. `wallets` and the foreign keys from
+  `transactions.from_wallet_id` / `to_wallet_id` arrive with the wallets API.
+- `balance_after_minor` and `account_version` are required on every posting.
+  `ledger.Post` writes the projected running balance; updating the cached
+  `accounts.balance_minor` / `version` arrives with reversals.
 
 ## Alternatives considered
 
