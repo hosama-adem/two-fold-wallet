@@ -1,3 +1,20 @@
+-- name: InsertJournalEntry :one
+INSERT INTO journal_entries (
+    id, transaction_id, kind, description
+) VALUES (
+    $1, $2, $3, $4
+)
+RETURNING *;
+
+-- name: InsertPosting :one
+INSERT INTO postings (
+    id, journal_id, account_id, direction, amount_minor,
+    currency, balance_after_minor, account_version
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8
+)
+RETURNING *;
+
 -- name: GetAccountByID :one
 SELECT * FROM accounts
 WHERE id = $1;

@@ -46,8 +46,8 @@ func NormalBalanceFor(t AccountType) (Side, bool) {
 }
 
 // IncreasesBalance reports whether a posting on this side raises the cached
-// balance. The posting engine will apply it; the schema only stores the two
-// sides. A debit raises a debit-normal account. A credit raises a credit-normal
+// balance. Post applies it through BalanceDelta when writing balance_after_minor.
+// A debit raises a debit-normal account. A credit raises a credit-normal
 // account, including every user wallet.
 func IncreasesBalance(normal, direction Side) bool {
 	return normal != "" && normal == direction

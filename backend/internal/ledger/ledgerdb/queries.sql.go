@@ -130,6 +130,88 @@ func (q *Queries) GetTransactionByReference(ctx context.Context, reference strin
 	return i, err
 }
 
+const insertJournalEntry = `-- name: InsertJournalEntry :one
+INSERT INTO journal_entries (
+    id, transaction_id, kind, description
+) VALUES (
+    $1, $2, $3, $4
+)
+RETURNING id, transaction_id, kind, reverses_journal_id, description, created_at
+`
+
+type InsertJournalEntryParams struct {
+	ID            uuid.UUID  `json:"id"`
+	TransactionID *uuid.UUID `json:"transaction_id"`
+	Kind          string     `json:"kind"`
+	Description   *string    `json:"description"`
+}
+
+func (q *Queries) InsertJournalEntry(ctx context.Context, arg InsertJournalEntryParams) (JournalEntry, error) {
+	row := q.db.QueryRow(ctx, insertJournalEntry,
+		arg.ID,
+		arg.TransactionID,
+		arg.Kind,
+		arg.Description,
+	)
+	var i JournalEntry
+	err := row.Scan(
+		&i.ID,
+		&i.TransactionID,
+		&i.Kind,
+		&i.ReversesJournalID,
+		&i.Description,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const insertPosting = `-- name: InsertPosting :one
+INSERT INTO postings (
+    id, journal_id, account_id, direction, amount_minor,
+    currency, balance_after_minor, account_version
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8
+)
+RETURNING id, journal_id, account_id, direction, amount_minor, currency, balance_after_minor, account_version, created_at
+`
+
+type InsertPostingParams struct {
+	ID                uuid.UUID `json:"id"`
+	JournalID         uuid.UUID `json:"journal_id"`
+	AccountID         uuid.UUID `json:"account_id"`
+	Direction         string    `json:"direction"`
+	AmountMinor       int64     `json:"amount_minor"`
+	Currency          string    `json:"currency"`
+	BalanceAfterMinor int64     `json:"balance_after_minor"`
+	AccountVersion    int64     `json:"account_version"`
+}
+
+func (q *Queries) InsertPosting(ctx context.Context, arg InsertPostingParams) (Posting, error) {
+	row := q.db.QueryRow(ctx, insertPosting,
+		arg.ID,
+		arg.JournalID,
+		arg.AccountID,
+		arg.Direction,
+		arg.AmountMinor,
+		arg.Currency,
+		arg.BalanceAfterMinor,
+		arg.AccountVersion,
+	)
+	var i Posting
+	err := row.Scan(
+		&i.ID,
+		&i.JournalID,
+		&i.AccountID,
+		&i.Direction,
+		&i.AmountMinor,
+		&i.Currency,
+		&i.BalanceAfterMinor,
+		&i.AccountVersion,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const listAccountsByOwner = `-- name: ListAccountsByOwner :many
 SELECT id, code, type, normal_balance, currency, allow_negative, balance_minor, version, owner_user_id, created_at FROM accounts
 WHERE owner_user_id = $1

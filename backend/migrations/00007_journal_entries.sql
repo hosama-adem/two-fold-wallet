@@ -1,6 +1,6 @@
 -- +goose Up
 -- One business event on the books. Balanced debits and credits are NOT
--- checked here. The posting engine adds that deferred constraint.
+-- checked here. Migration 00010 adds the deferred balance trigger.
 -- A reversal is a new journal that points at the original. The unique
 -- column means the original can be reversed only once. Immutability
 -- triggers (reject UPDATE/DELETE) arrive with that reversal work.
