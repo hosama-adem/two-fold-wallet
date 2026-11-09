@@ -11,6 +11,19 @@ import (
 	"github.com/google/uuid"
 )
 
+type Account struct {
+	ID            uuid.UUID  `json:"id"`
+	Code          string     `json:"code"`
+	Type          string     `json:"type"`
+	NormalBalance string     `json:"normal_balance"`
+	Currency      string     `json:"currency"`
+	AllowNegative bool       `json:"allow_negative"`
+	BalanceMinor  int64      `json:"balance_minor"`
+	Version       int64      `json:"version"`
+	OwnerUserID   *uuid.UUID `json:"owner_user_id"`
+	CreatedAt     time.Time  `json:"created_at"`
+}
+
 type AuditLog struct {
 	ID          uuid.UUID       `json:"id"`
 	ActorUserID *uuid.UUID      `json:"actor_user_id"`
@@ -25,6 +38,15 @@ type AuditLog struct {
 	CreatedAt   time.Time       `json:"created_at"`
 }
 
+type JournalEntry struct {
+	ID                uuid.UUID  `json:"id"`
+	TransactionID     *uuid.UUID `json:"transaction_id"`
+	Kind              string     `json:"kind"`
+	ReversesJournalID *uuid.UUID `json:"reverses_journal_id"`
+	Description       *string    `json:"description"`
+	CreatedAt         time.Time  `json:"created_at"`
+}
+
 type OtpCode struct {
 	ID         uuid.UUID  `json:"id"`
 	PhoneE164  string     `json:"phone_e164"`
@@ -34,6 +56,18 @@ type OtpCode struct {
 	ExpiresAt  time.Time  `json:"expires_at"`
 	ConsumedAt *time.Time `json:"consumed_at"`
 	CreatedAt  time.Time  `json:"created_at"`
+}
+
+type Posting struct {
+	ID                uuid.UUID `json:"id"`
+	JournalID         uuid.UUID `json:"journal_id"`
+	AccountID         uuid.UUID `json:"account_id"`
+	Direction         string    `json:"direction"`
+	AmountMinor       int64     `json:"amount_minor"`
+	Currency          string    `json:"currency"`
+	BalanceAfterMinor int64     `json:"balance_after_minor"`
+	AccountVersion    int64     `json:"account_version"`
+	CreatedAt         time.Time `json:"created_at"`
 }
 
 type Session struct {
@@ -47,6 +81,33 @@ type Session struct {
 	RevokedAt   *time.Time `json:"revoked_at"`
 	ReplacedBy  *uuid.UUID `json:"replaced_by"`
 	CreatedAt   time.Time  `json:"created_at"`
+}
+
+type Transaction struct {
+	ID              uuid.UUID  `json:"id"`
+	Reference       string     `json:"reference"`
+	Kind            string     `json:"kind"`
+	Status          string     `json:"status"`
+	InitiatorUserID *uuid.UUID `json:"initiator_user_id"`
+	FromWalletID    *uuid.UUID `json:"from_wallet_id"`
+	ToWalletID      *uuid.UUID `json:"to_wallet_id"`
+	AmountMinor     int64      `json:"amount_minor"`
+	FeeMinor        int64      `json:"fee_minor"`
+	Currency        string     `json:"currency"`
+	Note            *string    `json:"note"`
+	IdempotencyKey  *string    `json:"idempotency_key"`
+	CreatedAt       time.Time  `json:"created_at"`
+	CompletedAt     *time.Time `json:"completed_at"`
+}
+
+type TransactionEvent struct {
+	ID            uuid.UUID `json:"id"`
+	TransactionID uuid.UUID `json:"transaction_id"`
+	FromStatus    string    `json:"from_status"`
+	ToStatus      string    `json:"to_status"`
+	Reason        *string   `json:"reason"`
+	Actor         string    `json:"actor"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 type User struct {
