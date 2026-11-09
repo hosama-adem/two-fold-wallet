@@ -11,6 +11,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/hosama-adem/twofold/backend/internal/ledger"
 )
 
 func newID() uuid.UUID {
@@ -46,6 +48,20 @@ func insertUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool) uuid.UUID
 	return id
 }
 
+func insertOwnedAccount(t *testing.T, ctx context.Context, pool *pgxpool.Pool, owner uuid.UUID, accountType, normal string, allowNegative bool) uuid.UUID {
+	t.Helper()
+	id := newID()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO accounts (
+			id, code, type, normal_balance, currency, allow_negative, owner_user_id
+		) VALUES ($1, $2, $3, $4, 'ETB', $5, $6)
+	`, id, accountType+":"+id.String(), accountType, normal, allowNegative, owner)
+	if err != nil {
+		t.Fatalf("insert %s account: %v", accountType, err)
+	}
+	return id
+}
+
 func insertLiabilityAccount(t *testing.T, ctx context.Context, pool *pgxpool.Pool, owner uuid.UUID) uuid.UUID {
 	t.Helper()
 	id := newID()
@@ -55,6 +71,23 @@ func insertLiabilityAccount(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 	`, id, "wallet:"+id.String(), owner)
 	if err != nil {
 		t.Fatalf("insert liability: %v", err)
+	}
+	return id
+}
+
+func commitPost(t *testing.T, ctx context.Context, pool *pgxpool.Pool, journal ledger.Journal) uuid.UUID {
+	t.Helper()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	id, err := ledger.Post(ctx, tx, journal)
+	if err != nil {
+		t.Fatalf("Post: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
 	}
 	return id
 }

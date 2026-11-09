@@ -44,14 +44,15 @@ func TestJournalReversalLink(t *testing.T) {
 	requireViolation(t, err, "23514", "journal_entries_reversal_link")
 
 	// An INSERT that points a row at its own id dies on the foreign key,
-	// because the new row is not visible yet. Updating an existing reversal
-	// onto itself is what hits the CHECK.
+	// because the new row is not visible yet. UPDATE used to be how the
+	// self-link CHECK was reached. History is append-only now, so the
+	// update is rejected before that CHECK runs.
 	_, err = pool.Exec(ctx, `
 		UPDATE journal_entries
 		SET reverses_journal_id = id
 		WHERE id = $1
 	`, reversal)
-	requireViolation(t, err, "23514", "journal_entries_reversal_link")
+	requireAppendOnly(t, err, "journal_entries")
 
 	got, err := ledgerdb.New(pool).GetJournalEntryByID(ctx, reversal)
 	if err != nil {

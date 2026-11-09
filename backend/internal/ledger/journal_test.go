@@ -25,6 +25,18 @@ func mustLine(t *testing.T, account uuid.UUID, direction Side, amount Money) Lin
 	return line
 }
 
+func TestNewJournalRejectsDirectReversal(t *testing.T) {
+	a := uuid.Must(uuid.NewV7())
+	b := uuid.Must(uuid.NewV7())
+	_, err := NewJournal(KindReversal, []Line{
+		mustLine(t, a, Debit, mustMoney(t, 10, CurrencyETB)),
+		mustLine(t, b, Credit, mustMoney(t, 10, CurrencyETB)),
+	})
+	if !errors.Is(err, ErrReversalDirect) {
+		t.Fatalf("got %v, want ErrReversalDirect", err)
+	}
+}
+
 func TestNewJournalRejectsEmpty(t *testing.T) {
 	a := uuid.Must(uuid.NewV7())
 	etb := mustMoney(t, 100, CurrencyETB)
