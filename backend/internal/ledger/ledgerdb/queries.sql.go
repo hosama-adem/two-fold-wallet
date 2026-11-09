@@ -11,6 +11,18 @@ import (
 	"github.com/google/uuid"
 )
 
+const findReversalOfJournal = `-- name: FindReversalOfJournal :one
+SELECT id FROM journal_entries
+WHERE reverses_journal_id = $1
+`
+
+func (q *Queries) FindReversalOfJournal(ctx context.Context, reversesJournalID *uuid.UUID) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, findReversalOfJournal, reversesJournalID)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const getAccountByCode = `-- name: GetAccountByCode :one
 SELECT id, code, type, normal_balance, currency, allow_negative, balance_minor, version, owner_user_id, created_at FROM accounts
 WHERE code = $1
@@ -57,6 +69,30 @@ func (q *Queries) GetAccountByID(ctx context.Context, id uuid.UUID) (Account, er
 	return i, err
 }
 
+const getAccountForUpdate = `-- name: GetAccountForUpdate :one
+SELECT id, code, type, normal_balance, currency, allow_negative, balance_minor, version, owner_user_id, created_at FROM accounts
+WHERE id = $1
+FOR UPDATE
+`
+
+func (q *Queries) GetAccountForUpdate(ctx context.Context, id uuid.UUID) (Account, error) {
+	row := q.db.QueryRow(ctx, getAccountForUpdate, id)
+	var i Account
+	err := row.Scan(
+		&i.ID,
+		&i.Code,
+		&i.Type,
+		&i.NormalBalance,
+		&i.Currency,
+		&i.AllowNegative,
+		&i.BalanceMinor,
+		&i.Version,
+		&i.OwnerUserID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getJournalEntryByID = `-- name: GetJournalEntryByID :one
 SELECT id, transaction_id, kind, reverses_journal_id, description, created_at FROM journal_entries
 WHERE id = $1
@@ -64,6 +100,26 @@ WHERE id = $1
 
 func (q *Queries) GetJournalEntryByID(ctx context.Context, id uuid.UUID) (JournalEntry, error) {
 	row := q.db.QueryRow(ctx, getJournalEntryByID, id)
+	var i JournalEntry
+	err := row.Scan(
+		&i.ID,
+		&i.TransactionID,
+		&i.Kind,
+		&i.ReversesJournalID,
+		&i.Description,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getJournalEntryForUpdate = `-- name: GetJournalEntryForUpdate :one
+SELECT id, transaction_id, kind, reverses_journal_id, description, created_at FROM journal_entries
+WHERE id = $1
+FOR UPDATE
+`
+
+func (q *Queries) GetJournalEntryForUpdate(ctx context.Context, id uuid.UUID) (JournalEntry, error) {
+	row := q.db.QueryRow(ctx, getJournalEntryForUpdate, id)
 	var i JournalEntry
 	err := row.Scan(
 		&i.ID,
@@ -207,6 +263,41 @@ func (q *Queries) InsertPosting(ctx context.Context, arg InsertPostingParams) (P
 		&i.Currency,
 		&i.BalanceAfterMinor,
 		&i.AccountVersion,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const insertReversalJournal = `-- name: InsertReversalJournal :one
+INSERT INTO journal_entries (
+    id, transaction_id, kind, reverses_journal_id, description
+) VALUES (
+    $1, $2, 'reversal', $3, $4
+)
+RETURNING id, transaction_id, kind, reverses_journal_id, description, created_at
+`
+
+type InsertReversalJournalParams struct {
+	ID                uuid.UUID  `json:"id"`
+	TransactionID     *uuid.UUID `json:"transaction_id"`
+	ReversesJournalID *uuid.UUID `json:"reverses_journal_id"`
+	Description       *string    `json:"description"`
+}
+
+func (q *Queries) InsertReversalJournal(ctx context.Context, arg InsertReversalJournalParams) (JournalEntry, error) {
+	row := q.db.QueryRow(ctx, insertReversalJournal,
+		arg.ID,
+		arg.TransactionID,
+		arg.ReversesJournalID,
+		arg.Description,
+	)
+	var i JournalEntry
+	err := row.Scan(
+		&i.ID,
+		&i.TransactionID,
+		&i.Kind,
+		&i.ReversesJournalID,
+		&i.Description,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -390,4 +481,54 @@ func (q *Queries) ListTransactionEventsByTransactionID(ctx context.Context, tran
 		return nil, err
 	}
 	return items, nil
+}
+
+const recomputeAccountBalance = `-- name: RecomputeAccountBalance :one
+SELECT COALESCE(SUM(
+    CASE
+        WHEN p.direction = a.normal_balance THEN p.amount_minor
+        ELSE -p.amount_minor
+    END
+), 0)::bigint AS balance_minor
+FROM accounts a
+LEFT JOIN postings p ON p.account_id = a.id
+WHERE a.id = $1
+GROUP BY a.id
+`
+
+// Day 27 drift monitor compares this sum to accounts.balance_minor.
+// Same side as the account's normal balance adds; the opposite side subtracts.
+func (q *Queries) RecomputeAccountBalance(ctx context.Context, id uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, recomputeAccountBalance, id)
+	var balance_minor int64
+	err := row.Scan(&balance_minor)
+	return balance_minor, err
+}
+
+const updateAccountBalance = `-- name: UpdateAccountBalance :execrows
+UPDATE accounts
+SET balance_minor = $1,
+    version = $2
+WHERE id = $3
+  AND version = $4
+`
+
+type UpdateAccountBalanceParams struct {
+	BalanceMinor    int64     `json:"balance_minor"`
+	NextVersion     int64     `json:"next_version"`
+	ID              uuid.UUID `json:"id"`
+	ExpectedVersion int64     `json:"expected_version"`
+}
+
+func (q *Queries) UpdateAccountBalance(ctx context.Context, arg UpdateAccountBalanceParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateAccountBalance,
+		arg.BalanceMinor,
+		arg.NextVersion,
+		arg.ID,
+		arg.ExpectedVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

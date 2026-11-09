@@ -23,11 +23,11 @@ func TestPostWritesBalancedJournal(t *testing.T) {
 	ctx := context.Background()
 	q := ledgerdb.New(pool)
 
-	clearing, err := q.GetAccountByCode(ctx, ledger.CodeProviderClearingTelebirr)
-	if err != nil {
-		t.Fatal(err)
-	}
 	owner := insertUser(t, ctx, pool)
+	// A private asset stands in for provider clearing so this posting does
+	// not move the seeded system accounts. Those rows are shared, and history
+	// cannot be deleted afterwards.
+	asset := insertOwnedAccount(t, ctx, pool, owner, "asset", "debit", false)
 	wallet := insertLiabilityAccount(t, ctx, pool, owner)
 
 	debit, err := ledger.NewMoney(500, ledger.CurrencyETB)
@@ -39,7 +39,7 @@ func TestPostWritesBalancedJournal(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := []ledger.Line{
-		mustNewLine(t, clearing.ID, ledger.Debit, debit),
+		mustNewLine(t, asset, ledger.Debit, debit),
 		mustNewLine(t, wallet, ledger.Credit, credit),
 	}
 	journal, err := ledger.NewJournal(ledger.KindTopUp, lines)
@@ -81,7 +81,6 @@ func TestPostWritesBalancedJournal(t *testing.T) {
 		t.Fatalf("postings = %d, want 2", len(postings))
 	}
 
-	// Day 10 does not update the cache; balance_after is the projected value.
 	var debitLine, creditLine ledgerdb.Posting
 	for _, p := range postings {
 		switch p.Direction {
@@ -91,19 +90,33 @@ func TestPostWritesBalancedJournal(t *testing.T) {
 			creditLine = p
 		}
 	}
-	if debitLine.BalanceAfterMinor != 500 {
-		t.Fatalf("clearing balance_after = %d, want 500", debitLine.BalanceAfterMinor)
+	if debitLine.BalanceAfterMinor != 500 || debitLine.AccountVersion != 1 {
+		t.Fatalf("asset line balance_after=%d version=%d, want 500 and 1", debitLine.BalanceAfterMinor, debitLine.AccountVersion)
 	}
-	if creditLine.BalanceAfterMinor != 500 {
-		t.Fatalf("wallet balance_after = %d, want 500", creditLine.BalanceAfterMinor)
+	if creditLine.BalanceAfterMinor != 500 || creditLine.AccountVersion != 1 {
+		t.Fatalf("wallet line balance_after=%d version=%d, want 500 and 1", creditLine.BalanceAfterMinor, creditLine.AccountVersion)
 	}
 
-	clearingAfter, err := q.GetAccountByID(ctx, clearing.ID)
+	assetAfter, err := q.GetAccountByID(ctx, asset)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if clearingAfter.BalanceMinor != clearing.BalanceMinor {
-		t.Fatalf("cached clearing balance changed: %d → %d", clearing.BalanceMinor, clearingAfter.BalanceMinor)
+	if assetAfter.BalanceMinor != 500 || assetAfter.Version != 1 {
+		t.Fatalf("asset cache = (%d, v%d), want (500, v1)", assetAfter.BalanceMinor, assetAfter.Version)
+	}
+	walletAfter, err := q.GetAccountByID(ctx, wallet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if walletAfter.BalanceMinor != 500 || walletAfter.Version != 1 {
+		t.Fatalf("wallet cache = (%d, v%d), want (500, v1)", walletAfter.BalanceMinor, walletAfter.Version)
+	}
+	recomputed, err := ledger.RecomputeBalance(ctx, pool, wallet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recomputed != walletAfter.BalanceMinor {
+		t.Fatalf("recomputed wallet = %d, cache = %d", recomputed, walletAfter.BalanceMinor)
 	}
 }
 

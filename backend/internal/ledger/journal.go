@@ -7,19 +7,32 @@ import (
 	"github.com/google/uuid"
 )
 
-// Sentinel validation errors returned by NewJournal and Post.
+// Sentinel errors from NewJournal, Post, and Reverse.
 var (
-	ErrEmptyJournal      = errors.New("ledger: journal needs at least two lines")
-	ErrCurrencyMismatch  = errors.New("ledger: journal lines must share one currency")
-	ErrUnbalanced        = errors.New("ledger: journal debits do not equal credits")
-	ErrUnknownKind       = errors.New("ledger: unknown journal kind")
-	ErrUnknownDirection  = errors.New("ledger: direction must be debit or credit")
-	ErrInvalidAccountID  = errors.New("ledger: account id is required")
+	ErrEmptyJournal     = errors.New("ledger: journal needs at least two lines")
+	ErrCurrencyMismatch = errors.New("ledger: journal lines must share one currency")
+	ErrUnbalanced       = errors.New("ledger: journal debits do not equal credits")
+	ErrUnknownKind      = errors.New("ledger: unknown journal kind")
+	ErrUnknownDirection = errors.New("ledger: direction must be debit or credit")
+	ErrInvalidAccountID = errors.New("ledger: account id is required")
+	ErrReversalDirect   = errors.New("ledger: reversal journals are created by Reverse")
+
+	// ErrNegativeBalance means the journal's net effect would take an account
+	// below zero and that account has allow_negative = false. A line may dip
+	// below zero inside the journal; the check is the balance at commit.
+	ErrNegativeBalance = errors.New("ledger: account would go negative")
+	// ErrVersionConflict means the cached balance moved after it was read.
+	// Post locks the row first; this is the second guard.
+	ErrVersionConflict = errors.New("ledger: account version conflict")
+	// ErrAlreadyReversed means reverses_journal_id is already taken.
+	ErrAlreadyReversed = errors.New("ledger: journal already reversed")
+	ErrJournalNotFound = errors.New("ledger: journal not found")
+	ErrReasonRequired  = errors.New("ledger: reversal reason is required")
 )
 
 // Kind is the business reason for a journal entry. Values match
-// journal_entries_kind_known. Reversal journals are created by Reverse (Day 11),
-// not by callers of Post.
+// journal_entries_kind_known. KindReversal is not accepted by NewJournal:
+// Reverse is the only constructor, so the link column cannot be forgotten.
 type Kind string
 
 const (
@@ -29,6 +42,7 @@ const (
 	KindMerchantPayment Kind = "merchant_payment"
 	KindMoneyRequest    Kind = "money_request"
 	KindAdjustment      Kind = "adjustment"
+	KindReversal        Kind = "reversal"
 )
 
 func (k Kind) known() bool {
@@ -124,9 +138,16 @@ func (j Journal) Description() string { return j.description }
 func (j Journal) TransactionID() *uuid.UUID { return j.transactionID }
 
 func (j Journal) validate() error {
+	if j.kind == KindReversal {
+		return ErrReversalDirect
+	}
 	if !j.kind.known() {
 		return fmt.Errorf("%w: %q", ErrUnknownKind, j.kind)
 	}
+	return j.validateLines()
+}
+
+func (j Journal) validateLines() error {
 	if len(j.lines) < 2 {
 		return ErrEmptyJournal
 	}

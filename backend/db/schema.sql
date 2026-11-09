@@ -117,7 +117,7 @@ CREATE TRIGGER audit_logs_no_truncate
     FOR EACH STATEMENT
     EXECUTE PROCEDURE audit_logs_append_only();
 
--- Ledger (migrations 00005–00009). Seeds live in 00009, not in this snapshot.
+-- Ledger (migrations 00005–00011). Seeds live in 00009, not in this snapshot.
 -- A user wallet is a liability. Postings store direction + a positive amount.
 
 CREATE TABLE accounts (
@@ -371,3 +371,46 @@ CREATE CONSTRAINT TRIGGER postings_journal_balanced
     DEFERRABLE INITIALLY DEFERRED
     FOR EACH ROW
     EXECUTE PROCEDURE assert_journal_balanced();
+
+-- History. Corrections are new reversal journals (migration 00011).
+CREATE OR REPLACE FUNCTION ledger_append_only()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RAISE EXCEPTION '% is append-only', TG_TABLE_NAME
+        USING ERRCODE = 'integrity_constraint_violation';
+    RETURN NULL;
+END;
+$$;
+
+CREATE TRIGGER journal_entries_no_update
+    BEFORE UPDATE ON journal_entries
+    FOR EACH ROW
+    EXECUTE PROCEDURE ledger_append_only();
+
+CREATE TRIGGER journal_entries_no_delete
+    BEFORE DELETE ON journal_entries
+    FOR EACH ROW
+    EXECUTE PROCEDURE ledger_append_only();
+
+CREATE TRIGGER journal_entries_no_truncate
+    BEFORE TRUNCATE ON journal_entries
+    FOR EACH STATEMENT
+    EXECUTE PROCEDURE ledger_append_only();
+
+CREATE TRIGGER postings_no_update
+    BEFORE UPDATE ON postings
+    FOR EACH ROW
+    EXECUTE PROCEDURE ledger_append_only();
+
+CREATE TRIGGER postings_no_delete
+    BEFORE DELETE ON postings
+    FOR EACH ROW
+    EXECUTE PROCEDURE ledger_append_only();
+
+CREATE TRIGGER postings_no_truncate
+    BEFORE TRUNCATE ON postings
+    FOR EACH STATEMENT
+    EXECUTE PROCEDURE ledger_append_only();
+
