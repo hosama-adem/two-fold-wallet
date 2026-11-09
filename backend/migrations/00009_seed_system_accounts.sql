@@ -66,8 +66,22 @@ INSERT INTO accounts (
     );
 
 -- +goose Down
--- Fails if a posting already references one of these accounts. That is
--- deliberate: seeded history is not something a down should orphan.
+-- Peel postings off the seeded accounts first. CI shares one Postgres, so
+-- earlier packages may have written probe lines. A one-step down must still
+-- be able to remove the seed. Empty journals are fine. The next downs drop
+-- the postings and journals tables entirely.
+DELETE FROM postings
+WHERE account_id IN (
+    SELECT id FROM accounts
+    WHERE code IN (
+        'provider_clearing:telebirr',
+        'provider_clearing:chapa',
+        'payouts_pending',
+        'fee_revenue',
+        'suspense'
+    )
+);
+
 DELETE FROM accounts
 WHERE code IN (
     'provider_clearing:telebirr',
