@@ -47,3 +47,8 @@ Two lines per merged day: what you learned, what surprised you.
 
 - Learned: PIN lockout must not soft-lock login — `pin.Verify` only gates money movement. Atomic `UPDATE … RETURNING` keeps concurrent wrong verifies from skipping the 5th-failure lock.
 - Surprised: while locked, skipping argon2 is not just a perf win — a Match call would still burn CPU for an attacker who already knows the account is locked.
+
+## feat: ledger schema
+
+- Learned: a wallet is a liability. Crediting it means Twofold owes the user more. A posting keeps a direction and a positive `amount_minor`, so a café credited 300 and debited a fee of 3 is two readable lines, and `sum(debits) = sum(credits)` compares two positive totals.
+- Surprised: Postgres already rejects a negative cached balance when `allow_negative` is false, and that flag defaults to false. The five system accounts opt in, because a fee reversal or a provider settlement can cross zero before the books catch up. The balanced-journal trigger is still absent on purpose. That check belongs to the posting engine.

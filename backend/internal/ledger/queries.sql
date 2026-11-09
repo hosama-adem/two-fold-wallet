@@ -23,12 +23,12 @@ WHERE id = $1;
 -- name: ListPostingsByJournalID :many
 SELECT * FROM postings
 WHERE journal_id = $1
-ORDER BY id;
+ORDER BY created_at, id;
 
 -- name: ListPostingsByAccountID :many
 SELECT * FROM postings
 WHERE account_id = $1
-ORDER BY id;
+ORDER BY created_at, id;
 
 -- name: GetTransactionByID :one
 SELECT * FROM transactions

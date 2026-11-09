@@ -168,9 +168,9 @@ func (q *Queries) ListAccountsByOwner(ctx context.Context, ownerUserID *uuid.UUI
 }
 
 const listPostingsByAccountID = `-- name: ListPostingsByAccountID :many
-SELECT id, journal_id, account_id, direction, amount_minor, currency, balance_after_minor, account_version FROM postings
+SELECT id, journal_id, account_id, direction, amount_minor, currency, balance_after_minor, account_version, created_at FROM postings
 WHERE account_id = $1
-ORDER BY id
+ORDER BY created_at, id
 `
 
 func (q *Queries) ListPostingsByAccountID(ctx context.Context, accountID uuid.UUID) ([]Posting, error) {
@@ -191,6 +191,7 @@ func (q *Queries) ListPostingsByAccountID(ctx context.Context, accountID uuid.UU
 			&i.Currency,
 			&i.BalanceAfterMinor,
 			&i.AccountVersion,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -203,9 +204,9 @@ func (q *Queries) ListPostingsByAccountID(ctx context.Context, accountID uuid.UU
 }
 
 const listPostingsByJournalID = `-- name: ListPostingsByJournalID :many
-SELECT id, journal_id, account_id, direction, amount_minor, currency, balance_after_minor, account_version FROM postings
+SELECT id, journal_id, account_id, direction, amount_minor, currency, balance_after_minor, account_version, created_at FROM postings
 WHERE journal_id = $1
-ORDER BY id
+ORDER BY created_at, id
 `
 
 func (q *Queries) ListPostingsByJournalID(ctx context.Context, journalID uuid.UUID) ([]Posting, error) {
@@ -226,6 +227,7 @@ func (q *Queries) ListPostingsByJournalID(ctx context.Context, journalID uuid.UU
 			&i.Currency,
 			&i.BalanceAfterMinor,
 			&i.AccountVersion,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}

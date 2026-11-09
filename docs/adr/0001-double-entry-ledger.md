@@ -1,76 +1,121 @@
-# ADR 0001: Double-entry ledger with direction and positive amounts
+# ADR 0001: Direction and a positive amount
 
-**Status:** Accepted  
-**Date:** 2026-11-08  
-**Context:** M2 ledger core — schema before the posting engine
+**Status:** Accepted
+**Date:** 2026-11-09
 
 ## Context
 
-Twofold’s balances must be rebuildable from history. Every movement of value is a
-journal entry made of two or more postings. We needed to decide how a single
-posting stores “which way” money moved, and how the database refuses bad rows
-before any Go posting engine exists.
+Twofold's balances have to be rebuildable from history. Every movement of value
+is a journal entry made of postings. The schema has to record which way each
+line moved, and Postgres has to reject a bad line before any Go posting engine
+exists.
 
-Customer wallets are **liabilities** on Twofold’s books: money in a wallet is
-money we owe the user. Provider clearing accounts are **assets**. Fee income is
-**revenue**. That mapping drives each account’s normal balance (debit-normal vs
-credit-normal) and how a debit or credit changes the cached balance later.
+From the platform's point of view, money in a customer wallet is money Twofold
+owes that customer. Wallets are **liabilities**. Cash sitting at Telebirr or
+Chapa is an **asset** (`provider_clearing:*`). Fees we have earned are
+**revenue**. Unexplained provider money waits in **suspense** (equity).
+
+That classification picks the normal balance:
+
+| Account type | Normal side | Balance |
+|---|---|---|
+| Asset, expense | Debit | debits − credits |
+| Liability, revenue, equity | Credit | credits − debits |
+
+A credit on a wallet increases what we owe. A debit on clearing increases what
+the provider is holding for us. The same word, "credit", means opposite
+economic directions on those two accounts. The posting has to say which column
+it sits in, and the account has to say which column is its normal side.
 
 ## Decision
 
-1. **Postings carry `direction` (`debit` | `credit`) and a strictly positive
-   `amount_minor`.** We do not store signed amounts.
-2. **Currency lives on both the account and the posting**, with a composite
-   foreign key `(account_id, currency) → accounts(id, currency)` so a posting
-   cannot quietly use a different currency than its account.
-3. **`allow_negative` defaults to `false`.** User wallets must not go below
-   zero on the cached balance; selected system accounts may set
-   `allow_negative = true` when a temporary negative is meaningful.
-4. **System accounts are seeded in the migration**
-   (`provider_clearing:telebirr`, `provider_clearing:chapa`, `payouts_pending`,
-   `fee_revenue`, `suspense`) so every environment starts with the same
-   clearing and revenue buckets.
+Each posting stores `direction` (`debit` or `credit`) and a strictly positive
+`amount_minor`. We do not store a signed amount.
 
-## Why direction + positive amount (not signed amounts)
+A top-up of 500 ETB via Telebirr:
 
-Signed amounts look compact (`-300` vs `+300`), but they hide the story on
-mixed journals. A merchant payment fees the café in the same journal that pays
-it: credit 300 ETB, debit 3 ETB fee. With direction, both lines stay readable
-and sum cleanly as `sum(debits) = sum(credits)` per currency. With signs, one
-line is “negative” for reasons that are not “money left the account” in the
-accounting sense — they are opposite sides of the same event.
+| Account | Debit | Credit |
+|---|---:|---:|
+| `provider_clearing:telebirr` (asset) | 500 | |
+| wallet (liability to the user) | | 500 |
 
-Positive amounts also make overflow and “zero money” checks trivial:
-`amount_minor > 0` (and an upper bound) at the database. A signed column would
-need extra rules for zero, and apps would disagree about whether `-x` means
-credit or debit.
+A merchant payment of 300 ETB with a 3 ETB fee charged to the café is the case
+that decided this:
 
-Balance formulas stay explicit at the account:
+| Account | Debit | Credit |
+|---|---:|---:|
+| `wallet:selam` | 300 | |
+| `wallet:cafe` | 3 | |
+| `wallet:cafe` | | 300 |
+| `fee_revenue` | | 3 |
 
-| Normal balance | Balance meaning        |
-|----------------|------------------------|
-| Debit          | `debits − credits`     |
-| Credit         | `credits − debits`     |
+Debits 303, credits 303. The café has two lines in one journal. Both amounts
+are positive. Direction is what makes the fee and the sale readable next to
+each other.
 
-The posting engine (next issue) applies those formulas. The schema only stores
-facts the database can already police.
+The database enforces the part it can see without looking at the whole journal:
+
+- `amount_minor > 0` and `amount_minor <= 10^15` (santim). Zero is not a movement.
+- `direction` is only `debit` or `credit`.
+- The posting's currency matches its account, via
+  `(account_id, currency) → accounts(id, currency)`.
+- `allow_negative` defaults to `false`, and the cached `balance_minor` cannot
+  go below zero unless that flag is set. User wallets leave it false. The
+  seeded system accounts set it true, because settlement timing and a fee
+  reversal can cross zero for real.
+- An account with no owner is one of the seeded system codes, and a system
+  code has no owner.
+- A journal is a reversal exactly when `reverses_journal_id` is set, and that
+  column is unique, so an original journal can be reversed once.
+
+`ledger.Post` does not exist yet. When it does, a debit raises a debit-normal
+balance and a credit raises a credit-normal balance. Same side means the
+balance goes up; the opposite side means it goes down.
+
+## Why a signed column loses
+
+A signed `amount_minor` looks smaller: one number instead of a number plus a
+word. It breaks on the café. One of those two café lines would be negative, and
+the sign would not mean "the balance fell". It would mean "this line is the
+other column", which is a different fact, and it depends on which account type
+you secretly assumed.
+
+Positive amounts keep the journal invariant obvious: for one journal and one
+currency, `sum(debits) = sum(credits)`, both sides totals of positive numbers.
+A signed column also makes the overflow check worse. `amount_minor > 0` is a
+single predicate. A signed column needs a rule for zero, a rule for magnitude,
+and an agreement about whether negative means debit or credit. Callers drift.
+
+Two amount columns (`debit_minor`, `credit_minor`) with one of them always null
+was the other option. It stores the same facts as direction plus one amount,
+and it invites a row that fills both or neither. One amount column cannot be
+on both sides.
 
 ## Consequences
 
-- Inserting `amount_minor <= 0`, an unknown `direction`, or a currency that
-  does not match the account fails in Postgres — not later in API code.
-- Balanced journals (`sum(debits) = sum(credits)`) are **not** enforced here;
-  that deferred constraint lands with `ledger.Post`.
-- Immutability triggers and reversals are also deferred; `reverses_journal_id`
-  is unique so a journal can be reversed at most once when that work lands.
-- Application code must never invent a second way to move money outside
-  balanced journals.
+- Inserting `0`, a negative amount, an unknown direction, or a currency that
+  is not the account's currency fails in Postgres.
+- Inserting a negative `balance_minor` on an account with `allow_negative =
+  false` fails in Postgres. That flag defaults to false.
+- The five system accounts
+  (`provider_clearing:telebirr`, `provider_clearing:chapa`, `payouts_pending`,
+  `fee_revenue`, `suspense`) exist as soon as migrations finish, with stable
+  ids, in ETB.
+- This migration does **not** reject an unbalanced journal. A deferred
+  constraint that requires `sum(debits) = sum(credits)` arrives with the
+  posting engine. Immutability triggers arrive with reversals. `wallets` and
+  the foreign keys from `transactions.from_wallet_id` / `to_wallet_id` arrive
+  with the wallets API.
+- `balance_after_minor` and `account_version` are required on every posting so
+  a line cannot omit the running balance, but nothing in this change computes
+  them. The posting engine is the writer.
 
 ## Alternatives considered
 
-- **Signed `amount_minor` only** — rejected: ambiguous on multi-line journals,
-  weaker CHECK constraints, harder receipts.
-- **Separate debit/credit columns** — rejected: one of the two is always null;
-  direction + one amount is clearer.
-- **Currency only on the account** — rejected: denormalizing currency onto the
-  posting enables the composite FK and keeps history self-describing.
+- **Signed `amount_minor`.** Rejected. Ambiguous on a journal that debits and
+  credits the same account, and a weaker check than `amount_minor > 0`.
+- **Separate debit and credit columns.** Rejected. One of the two is always
+  empty, and both-filled rows need yet another check.
+- **Currency only on the account.** Rejected. Copying it onto the posting makes
+  the composite foreign key possible, and a posting row stays readable on its
+  own.

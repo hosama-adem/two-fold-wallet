@@ -117,20 +117,24 @@ CREATE TRIGGER audit_logs_no_truncate
     FOR EACH STATEMENT
     EXECUTE PROCEDURE audit_logs_append_only();
 
+-- Ledger (migrations 00005–00009). Seeds live in 00009, not in this snapshot.
+-- A user wallet is a liability. Postings store direction + a positive amount.
+
 CREATE TABLE accounts (
-    id                UUID PRIMARY KEY,
-    code              TEXT NOT NULL,
-    type              TEXT NOT NULL,
-    normal_balance    TEXT NOT NULL,
-    currency          TEXT NOT NULL,
-    allow_negative    BOOLEAN NOT NULL DEFAULT false,
-    balance_minor     BIGINT NOT NULL DEFAULT 0,
-    version           BIGINT NOT NULL DEFAULT 0,
-    owner_user_id     UUID REFERENCES users (id),
-    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    id               UUID PRIMARY KEY,
+    code             TEXT NOT NULL,
+    type             TEXT NOT NULL,
+    normal_balance   TEXT NOT NULL,
+    currency         TEXT NOT NULL,
+    allow_negative   BOOLEAN NOT NULL DEFAULT false,
+    balance_minor    BIGINT NOT NULL DEFAULT 0,
+    version          BIGINT NOT NULL DEFAULT 0,
+    owner_user_id    UUID REFERENCES users (id),
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     CONSTRAINT accounts_code_unique UNIQUE (code),
     CONSTRAINT accounts_id_currency_unique UNIQUE (id, currency),
+    CONSTRAINT accounts_code_format CHECK (code ~ '^[a-z0-9_.:-]{1,64}$'),
     CONSTRAINT accounts_type_known CHECK (
         type IN ('asset', 'liability', 'revenue', 'expense', 'equity')
     ),
@@ -145,29 +149,44 @@ CREATE TABLE accounts (
     CONSTRAINT accounts_version_nonneg CHECK (version >= 0),
     CONSTRAINT accounts_balance_nonneg_unless_allowed CHECK (
         allow_negative OR balance_minor >= 0
+    ),
+    CONSTRAINT accounts_system_code_iff_ownerless CHECK (
+        (owner_user_id IS NULL) = (
+            code IN (
+                'provider_clearing:telebirr',
+                'provider_clearing:chapa',
+                'payouts_pending',
+                'fee_revenue',
+                'suspense'
+            )
+        )
     )
 );
 
 CREATE INDEX accounts_owner_user_id_idx ON accounts (owner_user_id);
-CREATE INDEX accounts_type_idx ON accounts (type);
+
+CREATE INDEX accounts_system_idx
+    ON accounts (code)
+    WHERE owner_user_id IS NULL;
 
 CREATE TABLE transactions (
-    id                  UUID PRIMARY KEY,
-    reference           TEXT NOT NULL,
-    kind                TEXT NOT NULL,
-    status              TEXT NOT NULL,
-    initiator_user_id   UUID REFERENCES users (id),
-    from_wallet_id      UUID,
-    to_wallet_id        UUID,
-    amount_minor        BIGINT NOT NULL,
-    fee_minor           BIGINT NOT NULL DEFAULT 0,
-    currency            TEXT NOT NULL,
-    note                TEXT,
-    idempotency_key     TEXT,
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-    completed_at        TIMESTAMPTZ,
+    id                 UUID PRIMARY KEY,
+    reference          TEXT NOT NULL,
+    kind               TEXT NOT NULL,
+    status             TEXT NOT NULL,
+    initiator_user_id  UUID REFERENCES users (id),
+    from_wallet_id     UUID,
+    to_wallet_id       UUID,
+    amount_minor       BIGINT NOT NULL,
+    fee_minor          BIGINT NOT NULL DEFAULT 0,
+    currency           TEXT NOT NULL,
+    note               TEXT,
+    idempotency_key    TEXT,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at       TIMESTAMPTZ,
 
     CONSTRAINT transactions_reference_unique UNIQUE (reference),
+    CONSTRAINT transactions_reference_present CHECK (length(btrim(reference)) > 0),
     CONSTRAINT transactions_kind_known CHECK (
         kind IN (
             'p2p',
@@ -182,6 +201,7 @@ CREATE TABLE transactions (
         status IN (
             'pending',
             'processing',
+            'needs_review',
             'completed',
             'failed',
             'reversed',
@@ -195,20 +215,75 @@ CREATE TABLE transactions (
     ),
     CONSTRAINT transactions_fee_nonneg CHECK (
         fee_minor >= 0 AND fee_minor <= 1000000000000000
+    ),
+    CONSTRAINT transactions_wallets_distinct CHECK (
+        from_wallet_id IS NULL
+        OR to_wallet_id IS NULL
+        OR from_wallet_id <> to_wallet_id
+    ),
+    CONSTRAINT transactions_idempotency_key_uuid CHECK (
+        idempotency_key IS NULL
+        OR idempotency_key ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
     )
 );
+
+CREATE UNIQUE INDEX transactions_user_idempotency_key_idx
+    ON transactions (initiator_user_id, idempotency_key)
+    WHERE idempotency_key IS NOT NULL AND initiator_user_id IS NOT NULL;
 
 CREATE INDEX transactions_initiator_user_id_idx ON transactions (initiator_user_id);
 CREATE INDEX transactions_status_idx ON transactions (status);
 CREATE INDEX transactions_created_at_idx ON transactions (created_at DESC);
 
+CREATE TABLE transaction_events (
+    id               UUID PRIMARY KEY,
+    transaction_id   UUID NOT NULL REFERENCES transactions (id),
+    from_status      TEXT NOT NULL,
+    to_status        TEXT NOT NULL,
+    reason           TEXT,
+    actor            TEXT NOT NULL,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT transaction_events_from_status_known CHECK (
+        from_status IN (
+            'pending',
+            'processing',
+            'needs_review',
+            'completed',
+            'failed',
+            'reversed',
+            'expired',
+            'cancelled'
+        )
+    ),
+    CONSTRAINT transaction_events_to_status_known CHECK (
+        to_status IN (
+            'pending',
+            'processing',
+            'needs_review',
+            'completed',
+            'failed',
+            'reversed',
+            'expired',
+            'cancelled'
+        )
+    ),
+    CONSTRAINT transaction_events_status_moves CHECK (from_status <> to_status),
+    CONSTRAINT transaction_events_actor_known CHECK (
+        actor IN ('user', 'staff', 'system', 'provider')
+    )
+);
+
+CREATE INDEX transaction_events_transaction_id_idx
+    ON transaction_events (transaction_id, created_at);
+
 CREATE TABLE journal_entries (
-    id                    UUID PRIMARY KEY,
-    transaction_id        UUID REFERENCES transactions (id),
-    kind                  TEXT NOT NULL,
-    reverses_journal_id   UUID REFERENCES journal_entries (id),
-    description           TEXT,
-    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    id                   UUID PRIMARY KEY,
+    transaction_id       UUID REFERENCES transactions (id),
+    kind                 TEXT NOT NULL,
+    reverses_journal_id  UUID REFERENCES journal_entries (id),
+    description          TEXT,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     CONSTRAINT journal_entries_reverses_unique UNIQUE (reverses_journal_id),
     CONSTRAINT journal_entries_kind_known CHECK (
@@ -221,20 +296,33 @@ CREATE TABLE journal_entries (
             'adjustment',
             'reversal'
         )
+    ),
+    CONSTRAINT journal_entries_reversal_link CHECK (
+        (
+            kind = 'reversal'
+            AND reverses_journal_id IS NOT NULL
+            AND reverses_journal_id <> id
+        )
+        OR (
+            kind <> 'reversal'
+            AND reverses_journal_id IS NULL
+        )
     )
 );
 
 CREATE INDEX journal_entries_transaction_id_idx ON journal_entries (transaction_id);
+CREATE INDEX journal_entries_created_at_idx ON journal_entries (created_at DESC);
 
 CREATE TABLE postings (
-    id                    UUID PRIMARY KEY,
-    journal_id            UUID NOT NULL REFERENCES journal_entries (id),
-    account_id            UUID NOT NULL,
-    direction             TEXT NOT NULL,
-    amount_minor          BIGINT NOT NULL,
-    currency              TEXT NOT NULL,
-    balance_after_minor   BIGINT NOT NULL,
-    account_version       BIGINT NOT NULL,
+    id                   UUID PRIMARY KEY,
+    journal_id           UUID NOT NULL REFERENCES journal_entries (id),
+    account_id           UUID NOT NULL,
+    direction            TEXT NOT NULL,
+    amount_minor         BIGINT NOT NULL,
+    currency             TEXT NOT NULL,
+    balance_after_minor  BIGINT NOT NULL,
+    account_version      BIGINT NOT NULL,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     CONSTRAINT postings_direction_known CHECK (direction IN ('debit', 'credit')),
     CONSTRAINT postings_amount_positive CHECK (
@@ -247,43 +335,4 @@ CREATE TABLE postings (
 );
 
 CREATE INDEX postings_journal_id_idx ON postings (journal_id);
-CREATE INDEX postings_account_id_idx ON postings (account_id);
-
-CREATE TABLE transaction_events (
-    id                UUID PRIMARY KEY,
-    transaction_id    UUID NOT NULL REFERENCES transactions (id),
-    from_status       TEXT NOT NULL,
-    to_status         TEXT NOT NULL,
-    reason            TEXT,
-    actor             TEXT NOT NULL,
-    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-
-    CONSTRAINT transaction_events_from_status_known CHECK (
-        from_status IN (
-            'pending',
-            'processing',
-            'completed',
-            'failed',
-            'reversed',
-            'expired',
-            'cancelled'
-        )
-    ),
-    CONSTRAINT transaction_events_to_status_known CHECK (
-        to_status IN (
-            'pending',
-            'processing',
-            'completed',
-            'failed',
-            'reversed',
-            'expired',
-            'cancelled'
-        )
-    ),
-    CONSTRAINT transaction_events_actor_known CHECK (
-        actor IN ('user', 'staff', 'system', 'provider')
-    )
-);
-
-CREATE INDEX transaction_events_transaction_id_idx ON transaction_events (transaction_id);
-CREATE INDEX transaction_events_created_at_idx ON transaction_events (created_at DESC);
+CREATE INDEX postings_account_created_at_idx ON postings (account_id, created_at);

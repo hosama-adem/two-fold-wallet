@@ -66,6 +66,7 @@ type Posting struct {
 	Currency          string    `json:"currency"`
 	BalanceAfterMinor int64     `json:"balance_after_minor"`
 	AccountVersion    int64     `json:"account_version"`
+	CreatedAt         time.Time `json:"created_at"`
 }
 
 type Session struct {
