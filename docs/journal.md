@@ -57,3 +57,8 @@ Two lines per merged day: what you learned, what surprised you.
 
 - Learned: `ledger.Post` is the only writer — `NewMoney` / `NewLine` / `NewJournal` hide the fields so callers cannot assemble an unbalanced journal without hitting `ErrEmptyJournal`, `ErrCurrencyMismatch`, or `ErrUnbalanced` first. Postgres still has the last word: a deferred constraint trigger rejects the same mistake at `COMMIT` even if someone inserts with raw SQL.
 - Surprised: an immediate trigger makes double-entry impossible (the first line always looks unbalanced). `DEFERRABLE INITIALLY DEFERRED` is what lets you insert debit then credit inside one transaction and only check when the thought is finished.
+
+## feat: wallets API with available and ledger balances
+
+- Learned: the number a person can spend is not the ledger balance. Pending cash-outs are holds, so available is ledger minus those rows, computed in a view. The wallet row and its liability account have to be born in the same transaction as phone verification, or a crash leaves a verified user who owes nothing and owns nothing.
+- Surprised: freeze is a fact you store now and a rule you enforce later, inside the money transaction. `GET /v1/wallets` still shows a frozen balance. `outbound` can receive; `full` cannot. Closing with money still on the books is rejected by Postgres, not by a comment.

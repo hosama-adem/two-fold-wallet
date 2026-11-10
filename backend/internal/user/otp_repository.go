@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/hosama-adem/twofold/backend/internal/user/userdb"
 )
@@ -80,7 +81,17 @@ func (r *Repository) IncrementOTPAttempts(ctx context.Context, id uuid.UUID) (us
 
 // ConsumeOTP marks an OTP as used.
 func (r *Repository) ConsumeOTP(ctx context.Context, id uuid.UUID) (userdb.OtpCode, error) {
-	o, err := r.q.ConsumeOTP(ctx, id)
+	return r.consumeOTP(ctx, r.q, id)
+}
+
+// ConsumeOTPTx marks an OTP as used inside an existing transaction.
+// ErrNotFound means another transaction already consumed it.
+func (r *Repository) ConsumeOTPTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (userdb.OtpCode, error) {
+	return r.consumeOTP(ctx, r.q.WithTx(tx), id)
+}
+
+func (r *Repository) consumeOTP(ctx context.Context, q *userdb.Queries, id uuid.UUID) (userdb.OtpCode, error) {
+	o, err := q.ConsumeOTP(ctx, id)
 	if err != nil {
 		return userdb.OtpCode{}, mapReadError(err)
 	}

@@ -221,6 +221,33 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 	return i, err
 }
 
+const getUserByIDForUpdate = `-- name: GetUserByIDForUpdate :one
+SELECT id, phone_e164, handle, display_name, password_hash, pin_hash, pin_failed_count, pin_locked_until, kyc_tier, phone_verified_at, status, created_at, updated_at FROM users
+WHERE id = $1
+FOR UPDATE
+`
+
+func (q *Queries) GetUserByIDForUpdate(ctx context.Context, id uuid.UUID) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByIDForUpdate, id)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.PhoneE164,
+		&i.Handle,
+		&i.DisplayName,
+		&i.PasswordHash,
+		&i.PinHash,
+		&i.PinFailedCount,
+		&i.PinLockedUntil,
+		&i.KycTier,
+		&i.PhoneVerifiedAt,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getUserByPhone = `-- name: GetUserByPhone :one
 SELECT id, phone_e164, handle, display_name, password_hash, pin_hash, pin_failed_count, pin_locked_until, kyc_tier, phone_verified_at, status, created_at, updated_at FROM users
 WHERE phone_e164 = $1
@@ -228,6 +255,33 @@ WHERE phone_e164 = $1
 
 func (q *Queries) GetUserByPhone(ctx context.Context, phoneE164 string) (User, error) {
 	row := q.db.QueryRow(ctx, getUserByPhone, phoneE164)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.PhoneE164,
+		&i.Handle,
+		&i.DisplayName,
+		&i.PasswordHash,
+		&i.PinHash,
+		&i.PinFailedCount,
+		&i.PinLockedUntil,
+		&i.KycTier,
+		&i.PhoneVerifiedAt,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getUserByPhoneForUpdate = `-- name: GetUserByPhoneForUpdate :one
+SELECT id, phone_e164, handle, display_name, password_hash, pin_hash, pin_failed_count, pin_locked_until, kyc_tier, phone_verified_at, status, created_at, updated_at FROM users
+WHERE phone_e164 = $1
+FOR UPDATE
+`
+
+func (q *Queries) GetUserByPhoneForUpdate(ctx context.Context, phoneE164 string) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByPhoneForUpdate, phoneE164)
 	var i User
 	err := row.Scan(
 		&i.ID,

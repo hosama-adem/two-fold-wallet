@@ -74,7 +74,7 @@ curl -s localhost:8080/health
 curl -s localhost:8080/ready
 ```
 
-Useful targets: `migrate-down`, `migrate-new <name>`, `generate` (sqlc), `test`.  
+Useful targets: `migrate-down`, `migrate-new <name>`, `generate` (sqlc), `test`, `seed`.  
 `Makefile` mirrors the same targets when GNU make is installed. Package layout lives under `backend/internal/` per PRD §16.2.
 
 ### Auth (current)
@@ -84,6 +84,18 @@ Useful targets: `migrate-down`, `migrate-new <name>`, `generate` (sqlc), `test`.
 | Rate limits | In-memory token bucket on register / verify-phone / resend-otp / login (`AUTH_RATE_LIMIT_BURST`, `AUTH_RATE_LIMIT_WINDOW`). Both **IP** and **phone** keys must pass. Exceeded → `429` `rate_limited` + `Retry-After`. Proxies are not trusted by default (`ClientIP` = remote addr). |
 | Sessions | `GET /v1/me/sessions` lists active sessions (`current` from access `sid`). `DELETE /v1/me/sessions/{id}` is owner-only (`204` / `404`). Revoking the current session also fails subsequent Bearer checks (session row is revoked). |
 | Audit | Append-only `audit_logs`. Postgres rejects UPDATE, DELETE, and TRUNCATE. Login success/failure, session revoke, and logout go through `audit.Record`. Summaries are outcomes (`ok`, `invalid_credentials`, `via`) — the recorder rejects password, OTP, refresh token, and PIN fields before insert. |
+
+### Wallets (current)
+
+Verifying a phone opens one ETB wallet in the same database transaction as the user update: a liability account (`wallet:<user id>`) and a `wallets` row. A second verify, including one racing the first, does not insert another row.
+
+`GET /v1/wallets` is scoped to the access token. It returns `ledger_balance_minor` (the account cache, rebuildable from postings) and `available_minor` (ledger minus pending cash-outs). Pending cash-outs are `transactions` with kind `cash_out` and status `pending`, `processing`, or `needs_review`. That subtraction is the view `wallet_balances`, not a second balance column.
+
+`GET /v1/recipients/lookup?q=` accepts a phone or `@handle` and returns `display_name`, `handle`, and `phone_masked` (`+251 9•• ••• 678`). The full number is not in the JSON.
+
+Freeze is stored, not yet applied to a transfer. `freeze_mode` `outbound` can still receive; `full` cannot. `wallet.Gate.Allows` is the check the transfer and cash-out transactions will call. Closing a wallet with a non-zero ledger balance fails in Postgres.
+
+`make seed` (development only) creates `+251911000001` / `dev-seed-password-1` / `@devseed` and posts one 500.00 ETB top-up: debit `provider_clearing:telebirr`, credit the wallet. Running it again does not post a second journal.
 
 ---
 

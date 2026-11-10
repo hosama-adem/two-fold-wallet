@@ -19,9 +19,12 @@ import (
 	"github.com/hosama-adem/twofold/backend/internal/platform/database/testutil"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpserver"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpx"
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/hosama-adem/twofold/backend/internal/platform/ratelimit"
 	"github.com/hosama-adem/twofold/backend/internal/session"
 	"github.com/hosama-adem/twofold/backend/internal/user"
+	"github.com/hosama-adem/twofold/backend/internal/wallet"
 )
 
 // uniquePhone returns a fresh +2519… number so shared DATABASE_URL runs stay isolated.
@@ -39,18 +42,26 @@ func (c fixedClock) Now() time.Time { return c.t }
 
 func newAuthServer(t *testing.T, sms *auth.RecordingSMSSender, clk auth.Clock) *httpserver.Server {
 	t.Helper()
-	return newAuthServerWithLimiter(t, sms, clk, ratelimit.NewMemory(ratelimit.Config{
+	srv, _ := newAuthStack(t, sms, clk, ratelimit.NewMemory(ratelimit.Config{
 		Burst:  1000,
 		Window: time.Minute,
 	}))
+	return srv
 }
 
 func newAuthServerWithLimiter(t *testing.T, sms *auth.RecordingSMSSender, clk auth.Clock, lim ratelimit.Limiter) *httpserver.Server {
+	t.Helper()
+	srv, _ := newAuthStack(t, sms, clk, lim)
+	return srv
+}
+
+func newAuthStack(t *testing.T, sms *auth.RecordingSMSSender, clk auth.Clock, lim ratelimit.Limiter) (*httpserver.Server, *pgxpool.Pool) {
 	t.Helper()
 	pool := testutil.Postgres(t)
 	users := user.NewRepository(pool)
 	sessions := session.NewRepository(pool)
 	audits := audit.NewRecorder(pool)
+	wallets := wallet.NewService(pool)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	tokens, err := auth.NewTokenSigner(loadFixturePEM(t), "dev-1", 15*time.Minute, clk)
 	if err != nil {
@@ -62,6 +73,7 @@ func newAuthServerWithLimiter(t *testing.T, sms *auth.RecordingSMSSender, clk au
 		Tokens:     tokens,
 		Audit:      audits,
 		Pool:       pool,
+		Wallets:    wallets,
 		SMS:        sms,
 		Log:        log,
 		RefreshTTL: 30 * 24 * time.Hour,
@@ -70,7 +82,12 @@ func newAuthServerWithLimiter(t *testing.T, sms *auth.RecordingSMSSender, clk au
 		svc.WithClock(clk)
 	}
 	h := auth.NewHandler(svc, lim)
-	return httpserver.New(config.Config{AppEnv: "test", HTTPAddr: ":0"}, pool, log, httpserver.Options{Auth: h})
+	wh := wallet.NewHandler(wallets, h.RequireAccess())
+	srv := httpserver.New(config.Config{AppEnv: "test", HTTPAddr: ":0"}, pool, log, httpserver.Options{
+		Auth:    h,
+		Wallets: wh,
+	})
+	return srv, pool
 }
 
 func postJSON(t *testing.T, srv *httpserver.Server, path string, body any) *httptest.ResponseRecorder {

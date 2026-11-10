@@ -22,16 +22,16 @@ Each verified user gets an ETB wallet; `GET /v1/wallets` shows what they can spe
 
 ## TASKS
 
-- [ ] Migration: `wallets` (`status`, `freeze_mode`, `frozen_reason`)
-- [ ] Phone verification creates the liability account + wallet in the same DB transaction
-- [ ] Holds: `available = ledger − pending withdrawals` (column or view)
-- [ ] `GET /v1/wallets`, `GET /v1/recipients/lookup?q=` with masked names
-- [ ] Dev-only `make seed` that funds a test wallet through a proper journal
+- [x] Migration: `wallets` (`status`, `freeze_mode`, `frozen_reason`)
+- [x] Phone verification creates the liability account + wallet in the same DB transaction
+- [x] Holds: `available = ledger − pending withdrawals` (column or view)
+- [x] `GET /v1/wallets`, `GET /v1/recipients/lookup?q=` with masked names
+- [x] Dev-only `make seed` that funds a test wallet through a proper journal
 
 ## DONE WHEN
 
-- [ ] Test: verify phone creates exactly one wallet even if called twice concurrently
-- [ ] Lookup never returns the full phone number
+- [x] Test: verify phone creates exactly one wallet even if called twice concurrently
+- [x] Lookup never returns the full phone number
 
 ## OUT OF SCOPE
 

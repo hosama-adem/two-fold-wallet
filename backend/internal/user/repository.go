@@ -90,7 +90,25 @@ func (r *Repository) GetByPhone(ctx context.Context, phone string) (userdb.User,
 
 // MarkPhoneVerified stamps verification and activates pending users.
 func (r *Repository) MarkPhoneVerified(ctx context.Context, id uuid.UUID) (userdb.User, error) {
-	u, err := r.q.MarkPhoneVerified(ctx, id)
+	return r.markPhoneVerified(ctx, r.q, id)
+}
+
+// MarkPhoneVerifiedTx is MarkPhoneVerified inside an existing transaction.
+func (r *Repository) MarkPhoneVerifiedTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (userdb.User, error) {
+	return r.markPhoneVerified(ctx, r.q.WithTx(tx), id)
+}
+
+func (r *Repository) markPhoneVerified(ctx context.Context, q *userdb.Queries, id uuid.UUID) (userdb.User, error) {
+	u, err := q.MarkPhoneVerified(ctx, id)
+	if err != nil {
+		return userdb.User{}, mapReadError(err)
+	}
+	return u, nil
+}
+
+// GetByIDForUpdate locks the user row for the rest of the transaction.
+func (r *Repository) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, id uuid.UUID) (userdb.User, error) {
+	u, err := r.q.WithTx(tx).GetUserByIDForUpdate(ctx, id)
 	if err != nil {
 		return userdb.User{}, mapReadError(err)
 	}

@@ -14,6 +14,7 @@ import (
 	"github.com/hosama-adem/twofold/backend/internal/platform/config"
 	"github.com/hosama-adem/twofold/backend/internal/platform/database"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpx"
+	"github.com/hosama-adem/twofold/backend/internal/wallet"
 )
 
 // Server wraps the HTTP listener and Gin engine.
@@ -27,7 +28,8 @@ type Server struct {
 
 // Options configures optional HTTP mounts.
 type Options struct {
-	Auth *auth.Handler
+	Auth    *auth.Handler
+	Wallets *wallet.Handler
 }
 
 // New builds an HTTP server with health routes and the standard middleware stack.
@@ -73,6 +75,9 @@ func (s *Server) routes(opts Options) {
 	s.engine.GET("/ready", s.handleReady)
 	if opts.Auth != nil {
 		opts.Auth.Mount(s.engine)
+	}
+	if opts.Wallets != nil {
+		opts.Wallets.Mount(s.engine)
 	}
 	s.engine.NoRoute(s.handleNotFound)
 }
