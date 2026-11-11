@@ -2,9 +2,9 @@
 -- A wallet is the user-facing face of one liability account.
 -- status says whether the customer may move money.
 -- freeze_mode says which direction is blocked:
---   none  — send and receive
---   debit — cannot send or cash out; credits (receives) still post
---   full  — no movement
+--   none  - send and receive
+--   debit - cannot send or cash out, credits (receives) still post
+--   full  - no movement
 -- Enforce freeze_mode in the transaction that posts, not on GET.
 -- available balance is not a column. wallet_balances subtracts pending
 -- withdrawal holds from the ledger cache, so the two cannot drift.
@@ -44,6 +44,7 @@ CREATE TABLE wallets (
 CREATE INDEX wallets_user_id_idx ON wallets (user_id);
 
 -- A wallet must sit on the owner's ETB liability account.
+-- +goose StatementBegin
 CREATE OR REPLACE FUNCTION wallets_require_liability_account()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -67,6 +68,7 @@ BEGIN
     RETURN NEW;
 END;
 $$;
+-- +goose StatementEnd
 
 CREATE TRIGGER wallets_require_liability_account
     BEFORE INSERT OR UPDATE OF account_id, user_id, currency ON wallets
