@@ -63,7 +63,7 @@ Two lines per merged day: what you learned, what surprised you.
 - Learned: the number a person can spend is not the ledger balance. Pending cash-outs are holds, so available is ledger minus those rows, computed in a view. The wallet row and its liability account have to be born in the same transaction as phone verification, or a crash leaves a verified user who owes nothing and owns nothing.
 - Surprised: freeze is a fact you store now and a rule you enforce later, inside the money transaction. `GET /v1/wallets` still shows a frozen balance. `outbound` can receive; `full` cannot. Closing with money still on the books is rejected by Postgres, not by a comment.
 
-## feat: idempotency keys with request hashing and replay
+## test: property-based ledger invariants
 
-- Learned: the claim is the critical section. `INSERT … ON CONFLICT DO NOTHING` (or reclaim-if-expired) makes one request the owner; everyone else reads the row and branches — replay, `422` body mismatch, or `409` in flight. Storing the response is what turns a unique constraint from a 500 into a safe retry.
-- Surprised: caching a 5xx would poison the key for 24 hours. Releasing `in_progress` on server errors looks like a hole until you remember the client is about to send the same key again on purpose.
+- Learned: a property is cheaper than a spreadsheet of examples — generate valid and invalid journals, then assert `debits = credits`, cache = recompute, non-negative stays non-negative, and `reverse(post(j))` restores every balance. Shrinking turns a 1,000-case failure into the smallest journal that still breaks the law.
+- Surprised: the fast path is one funded world reused across checks, with a reverse after each case — 1,000 posts stay well under a minute because setup cost is paid once, not once per draw.

@@ -66,3 +66,14 @@ jobs:
         working-directory: backend
         # -p 1: one shared Postgres service — avoid migrate/user package races
         run: go test -p 1 ./...
+
+      - name: Ledger properties ×1000
+        working-directory: backend
+        # Pure applyLines/NewJournal properties + post integration (shared tx).
+        # reverse/overdraft at this scale are ApplyLines* properties; the DB
+        # variants still run in the Test step at rapid's default check count.
+        timeout-minutes: 1
+        run: >-
+          go test ./internal/ledger/ -count=1 -parallel 1 -timeout 60s
+          -run 'TestProperty(Valid|Invalid|Flip|BalanceDelta|ApplyLines|LedgerInvariants)'
+          -rapid.checks=1000
