@@ -139,13 +139,25 @@ type Wallet struct {
 }
 
 type WalletBalance struct {
-	ID                     uuid.UUID `json:"id"`
-	UserID                 uuid.UUID `json:"user_id"`
-	AccountID              uuid.UUID `json:"account_id"`
-	Currency               string    `json:"currency"`
-	Status                 string    `json:"status"`
-	FreezeMode             string    `json:"freeze_mode"`
-	LedgerBalanceMinor     int64     `json:"ledger_balance_minor"`
-	PendingWithdrawalMinor int64     `json:"pending_withdrawal_minor"`
-	AvailableMinor         int64     `json:"available_minor"`
+	WalletID           uuid.UUID `json:"wallet_id"`
+	UserID             uuid.UUID `json:"user_id"`
+	AccountID          uuid.UUID `json:"account_id"`
+	Currency           string    `json:"currency"`
+	Status             string    `json:"status"`
+	FreezeMode         string    `json:"freeze_mode"`
+	FrozenReason       *string   `json:"frozen_reason"`
+	LedgerBalanceMinor int64     `json:"ledger_balance_minor"`
+	HeldMinor          int64     `json:"held_minor"`
+	AvailableMinor     int64     `json:"available_minor"`
+}
+
+type WalletHold struct {
+	ID          uuid.UUID  `json:"id"`
+	WalletID    uuid.UUID  `json:"wallet_id"`
+	AmountMinor int64      `json:"amount_minor"`
+	Currency    string     `json:"currency"`
+	Kind        string     `json:"kind"`
+	Status      string     `json:"status"`
+	CreatedAt   time.Time  `json:"created_at"`
+	ReleasedAt  *time.Time `json:"released_at"`
 }

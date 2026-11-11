@@ -6,94 +6,69 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"github.com/hosama-adem/twofold/backend/internal/auth"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpx"
 )
 
-// Handler exposes the customer wallet routes.
+// CurrentUser reads the authenticated user id set by the access-token middleware.
+type CurrentUser func(c *gin.Context) (uuid.UUID, bool)
+
+// Handler serves wallet reads and recipient lookup.
 type Handler struct {
-	svc  *Service
-	auth gin.HandlerFunc
+	svc         *Service
+	require     gin.HandlerFunc
+	currentUser CurrentUser
 }
 
 // NewHandler builds the wallet HTTP adapter.
-// auth is the access-token middleware (auth.Handler.RequireAccess).
-func NewHandler(svc *Service, authenticate gin.HandlerFunc) *Handler {
-	return &Handler{svc: svc, auth: authenticate}
+// require is the access-token middleware. currentUser reads the id it stored.
+func NewHandler(svc *Service, require gin.HandlerFunc, currentUser CurrentUser) *Handler {
+	return &Handler{svc: svc, require: require, currentUser: currentUser}
 }
 
-// Mount registers wallet routes. Both require the authenticated user.
+// Mount registers GET /v1/wallets and GET /v1/recipients/lookup.
 func (h *Handler) Mount(e *gin.Engine) {
-	if h == nil || h.auth == nil {
-		return
-	}
-	e.GET("/v1/wallets", h.auth, h.List)
-	e.GET("/v1/recipients/lookup", h.auth, h.Lookup)
-}
-
-type walletResponse struct {
-	ID                     uuid.UUID `json:"id"`
-	Currency               string    `json:"currency"`
-	Status                 string    `json:"status"`
-	FreezeMode             string    `json:"freeze_mode"`
-	LedgerBalanceMinor     int64     `json:"ledger_balance_minor"`
-	PendingWithdrawalMinor int64     `json:"pending_withdrawal_minor"`
-	AvailableMinor         int64     `json:"available_minor"`
-}
-
-type listResponse struct {
-	Wallets []walletResponse `json:"wallets"`
-}
-
-type recipientResponse struct {
-	DisplayName string  `json:"display_name"`
-	Handle      *string `json:"handle,omitempty"`
-	PhoneMasked string  `json:"phone_masked"`
+	e.GET("/v1/wallets", h.require, h.List)
+	e.GET("/v1/recipients/lookup", h.require, h.Lookup)
 }
 
 // List handles GET /v1/wallets.
 func (h *Handler) List(c *gin.Context) {
-	userID, ok := auth.UserIDFromContext(c)
+	userID, ok := h.caller(c)
 	if !ok {
-		httpx.WriteError(c, unauthorized())
 		return
 	}
-	rows, err := h.svc.List(c.Request.Context(), userID)
+	out, err := h.svc.List(c.Request.Context(), userID)
 	if err != nil {
 		httpx.WriteError(c, err)
 		return
-	}
-	out := listResponse{Wallets: make([]walletResponse, 0, len(rows))}
-	for _, row := range rows {
-		out.Wallets = append(out.Wallets, walletResponse{
-			ID:                     row.ID,
-			Currency:               row.Currency,
-			Status:                 string(row.Status),
-			FreezeMode:             string(row.FreezeMode),
-			LedgerBalanceMinor:     row.LedgerBalanceMinor,
-			PendingWithdrawalMinor: row.PendingWithdrawalMinor,
-			AvailableMinor:         row.AvailableMinor,
-		})
 	}
 	c.JSON(http.StatusOK, out)
 }
 
-// Lookup handles GET /v1/recipients/lookup?q=
+// Lookup handles GET /v1/recipients/lookup?q=.
 func (h *Handler) Lookup(c *gin.Context) {
-	if _, ok := auth.UserIDFromContext(c); !ok {
-		httpx.WriteError(c, unauthorized())
+	if _, ok := h.caller(c); !ok {
 		return
 	}
-	rec, err := h.svc.Lookup(c.Request.Context(), c.Query("q"))
+	out, err := h.svc.Lookup(c.Request.Context(), c.Query("q"))
 	if err != nil {
 		httpx.WriteError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, recipientResponse{
-		DisplayName: rec.DisplayName,
-		Handle:      rec.Handle,
-		PhoneMasked: rec.PhoneMasked,
-	})
+	c.JSON(http.StatusOK, out)
+}
+
+func (h *Handler) caller(c *gin.Context) (uuid.UUID, bool) {
+	if h.currentUser == nil {
+		httpx.WriteError(c, unauthorized())
+		return uuid.Nil, false
+	}
+	userID, ok := h.currentUser(c)
+	if !ok || userID == uuid.Nil {
+		httpx.WriteError(c, unauthorized())
+		return uuid.Nil, false
+	}
+	return userID, true
 }
 
 func unauthorized() *httpx.Error {

@@ -76,7 +76,7 @@ func run() int {
 		RefreshTTL: cfg.RefreshTokenTTL,
 	})
 	authHandler := auth.NewHandler(authSvc, limiter)
-	walletHandler := wallet.NewHandler(wallets, authHandler.RequireAccess())
+	walletHandler := wallet.NewHandler(wallets, authHandler.RequireAccess(), auth.UserIDFromContext)
 
 	srv := httpserver.New(cfg, pool, log, httpserver.Options{
 		Auth:    authHandler,

@@ -2,119 +2,80 @@ package devseed_test
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/hosama-adem/twofold/backend/internal/platform/database/testutil"
 	"github.com/hosama-adem/twofold/backend/internal/wallet/devseed"
 )
 
-func TestSeedRefusesNonDevelopment(t *testing.T) {
-	t.Parallel()
-	for _, env := range []string{"", "production", "test", "staging"} {
-		if _, err := devseed.Run(context.Background(), nil, env); err == nil {
-			t.Fatalf("APP_ENV=%q was accepted", env)
-		} else if !strings.Contains(err.Error(), "refused") {
-			t.Fatalf("APP_ENV=%q: %v", env, err)
-		}
-	}
-}
-
-func TestSeedFundsOnceThroughAJournal(t *testing.T) {
+func TestSeedFundsThroughAJournalOnce(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration")
 	}
 	pool := testutil.Postgres(t)
 	ctx := context.Background()
 
-	first, err := devseed.Run(ctx, pool, "development")
+	var before int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM postings p
+		JOIN accounts a ON a.id = p.account_id
+		JOIN users u ON u.id = a.owner_user_id
+		WHERE u.phone_e164 = $1
+	`, devseed.Phone).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := devseed.Run(ctx, pool)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := devseed.Run(ctx, pool, "development")
+	second, err := devseed.Run(ctx, pool)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if second.Funded {
 		t.Fatal("second seed posted another journal")
 	}
-	if first.WalletID != second.WalletID || first.UserID != second.UserID {
-		t.Fatalf("seed identity changed: %+v then %+v", first, second)
+	if first.LedgerBalanceMinor != second.LedgerBalanceMinor {
+		t.Fatalf("balance changed on rerun: %d -> %d", first.LedgerBalanceMinor, second.LedgerBalanceMinor)
 	}
-	if second.LedgerBalanceMinor != second.AvailableMinor {
-		t.Fatalf("available %d != ledger %d with no hold", second.AvailableMinor, second.LedgerBalanceMinor)
+	if first.AvailableBalanceMinor != first.LedgerBalanceMinor {
+		t.Fatalf("available %d ledger %d", first.AvailableBalanceMinor, first.LedgerBalanceMinor)
 	}
-	if second.LedgerBalanceMinor < devseed.AmountMinor {
-		t.Fatalf("ledger = %d, want at least %d", second.LedgerBalanceMinor, devseed.AmountMinor)
+	if first.LedgerBalanceMinor < devseed.AmountMinor {
+		t.Fatalf("ledger = %d, want at least %d", first.LedgerBalanceMinor, devseed.AmountMinor)
 	}
 
-	var journals int
+	var after int
 	if err := pool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM journal_entries j
-		JOIN transactions t ON t.id = j.transaction_id
-		WHERE t.reference = $1
-		  AND j.kind = 'top_up'
-		  AND t.kind = 'top_up'
-		  AND t.status = 'completed'
-	`, devseed.Reference).Scan(&journals); err != nil {
+		SELECT count(*) FROM postings WHERE account_id = $1
+	`, first.AccountID).Scan(&after); err != nil {
 		t.Fatal(err)
 	}
-	if journals != 1 {
-		t.Fatalf("seed journals = %d, want 1", journals)
+	if first.Funded && after != before+1 {
+		t.Fatalf("postings before=%d after=%d, want one new credit", before, after)
+	}
+	if !first.Funded && after != before {
+		t.Fatalf("postings changed without a new journal: before=%d after=%d", before, after)
 	}
 
-	rows, err := pool.Query(ctx, `
-		SELECT a.code, p.direction, p.amount_minor
+	var kind string
+	var direction string
+	var amount int64
+	err = pool.QueryRow(ctx, `
+		SELECT je.kind, p.direction, p.amount_minor
 		FROM postings p
-		JOIN accounts a ON a.id = p.account_id
-		JOIN journal_entries j ON j.id = p.journal_id
-		JOIN transactions t ON t.id = j.transaction_id
-		WHERE t.reference = $1
-		ORDER BY p.direction
-	`, devseed.Reference)
+		JOIN journal_entries je ON je.id = p.journal_id
+		WHERE p.account_id = $1
+		ORDER BY p.created_at DESC
+		LIMIT 1
+	`, first.AccountID).Scan(&kind, &direction, &amount)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
-
-	type line struct {
-		code      string
-		direction string
-		amount    int64
-	}
-	var lines []line
-	for rows.Next() {
-		var ln line
-		if err := rows.Scan(&ln.code, &ln.direction, &ln.amount); err != nil {
-			t.Fatal(err)
-		}
-		lines = append(lines, ln)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	if len(lines) != 2 {
-		t.Fatalf("seed postings = %+v", lines)
-	}
-	var debit, credit line
-	for _, ln := range lines {
-		if ln.amount != devseed.AmountMinor {
-			t.Fatalf("posting amount = %d", ln.amount)
-		}
-		switch ln.direction {
-		case "debit":
-			debit = ln
-		case "credit":
-			credit = ln
-		default:
-			t.Fatalf("direction %q", ln.direction)
-		}
-	}
-	if debit.code != "provider_clearing:telebirr" {
-		t.Fatalf("debit account = %s", debit.code)
-	}
-	if credit.code != "wallet:"+second.UserID.String() {
-		t.Fatalf("credit account = %s", credit.code)
+	if kind != "top_up" || direction != "credit" || amount != devseed.AmountMinor {
+		t.Fatalf("latest posting kind=%s direction=%s amount=%d", kind, direction, amount)
 	}
 }

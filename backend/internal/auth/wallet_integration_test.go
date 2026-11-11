@@ -140,13 +140,13 @@ func TestWalletListAndLookupNeverRevealThePhone(t *testing.T) {
 	}
 	var listed struct {
 		Wallets []struct {
-			ID                     string `json:"id"`
-			Currency               string `json:"currency"`
-			Status                 string `json:"status"`
-			FreezeMode             string `json:"freeze_mode"`
-			LedgerBalanceMinor     int64  `json:"ledger_balance_minor"`
-			PendingWithdrawalMinor int64  `json:"pending_withdrawal_minor"`
-			AvailableMinor         int64  `json:"available_minor"`
+			ID                    string `json:"id"`
+			Currency              string `json:"currency"`
+			Status                string `json:"status"`
+			FreezeMode            string `json:"freeze_mode"`
+			LedgerBalanceMinor    int64  `json:"ledger_balance_minor"`
+			AvailableBalanceMinor int64  `json:"available_balance_minor"`
+			HeldMinor             int64  `json:"held_minor"`
 		} `json:"wallets"`
 	}
 	if err := json.Unmarshal(list.Body.Bytes(), &listed); err != nil {
@@ -159,7 +159,7 @@ func TestWalletListAndLookupNeverRevealThePhone(t *testing.T) {
 	if got.Currency != "ETB" || got.Status != "active" || got.FreezeMode != "none" {
 		t.Fatalf("wallet = %+v", got)
 	}
-	if got.LedgerBalanceMinor != 0 || got.PendingWithdrawalMinor != 0 || got.AvailableMinor != 0 {
+	if got.LedgerBalanceMinor != 0 || got.HeldMinor != 0 || got.AvailableBalanceMinor != 0 {
 		t.Fatalf("balances = %+v", got)
 	}
 	if bytes.Contains(list.Body.Bytes(), []byte("frozen_reason")) {

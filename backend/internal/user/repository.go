@@ -88,6 +88,19 @@ func (r *Repository) GetByPhone(ctx context.Context, phone string) (userdb.User,
 	return u, nil
 }
 
+// GetByPhoneForUpdate locks the user row inside tx.
+// Concurrent phone verifications for the same number queue on this lock.
+func (r *Repository) GetByPhoneForUpdate(ctx context.Context, tx pgx.Tx, phone string) (userdb.User, error) {
+	if tx == nil {
+		return userdb.User{}, errors.New("user: GetByPhoneForUpdate requires a transaction")
+	}
+	u, err := r.q.WithTx(tx).GetUserByPhoneForUpdate(ctx, phone)
+	if err != nil {
+		return userdb.User{}, mapReadError(err)
+	}
+	return u, nil
+}
+
 // MarkPhoneVerified stamps verification and activates pending users.
 func (r *Repository) MarkPhoneVerified(ctx context.Context, id uuid.UUID) (userdb.User, error) {
 	return r.markPhoneVerified(ctx, r.q, id)
@@ -95,20 +108,14 @@ func (r *Repository) MarkPhoneVerified(ctx context.Context, id uuid.UUID) (userd
 
 // MarkPhoneVerifiedTx is MarkPhoneVerified inside an existing transaction.
 func (r *Repository) MarkPhoneVerifiedTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (userdb.User, error) {
+	if tx == nil {
+		return userdb.User{}, errors.New("user: MarkPhoneVerifiedTx requires a transaction")
+	}
 	return r.markPhoneVerified(ctx, r.q.WithTx(tx), id)
 }
 
 func (r *Repository) markPhoneVerified(ctx context.Context, q *userdb.Queries, id uuid.UUID) (userdb.User, error) {
 	u, err := q.MarkPhoneVerified(ctx, id)
-	if err != nil {
-		return userdb.User{}, mapReadError(err)
-	}
-	return u, nil
-}
-
-// GetByIDForUpdate locks the user row for the rest of the transaction.
-func (r *Repository) GetByIDForUpdate(ctx context.Context, tx pgx.Tx, id uuid.UUID) (userdb.User, error) {
-	u, err := r.q.WithTx(tx).GetUserByIDForUpdate(ctx, id)
 	if err != nil {
 		return userdb.User{}, mapReadError(err)
 	}

@@ -59,6 +59,6 @@ migrate-new: ## Create a new goose migration: make migrate-new name=add_foo
 generate: ## Regenerate sqlc code (requires sqlc CLI on PATH)
 	cd $(BACKEND) && sqlc generate
 
-seed: ## Open the dev ETB wallet and fund it once through a journal (development only)
-	@test -f $(ROOT)/.env || (echo "missing .env — copy .env.example to .env" && exit 1)
+seed: ## Dev-only: open the sample ETB wallet and fund it with a journal
+	@test "$${APP_ENV}" != "production" || (echo "refusing to seed production" && exit 1)
 	cd $(BACKEND) && go run ./cmd/seed

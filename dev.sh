@@ -65,8 +65,15 @@ case "$cmd" in
   generate)
     cd "$BACKEND" && sqlc generate
     ;;
+  seed)
+    if [[ "${APP_ENV:-}" == "production" ]]; then
+      echo "refusing to seed production"
+      exit 1
+    fi
+    cd "$BACKEND" && go run ./cmd/seed
+    ;;
   *)
-    echo "usage: ./dev.sh {up|down|run|build|test|vet|lint|health|ready|migrate-up|migrate-down|migrate-new|generate}"
+    echo "usage: ./dev.sh {up|down|run|build|test|vet|lint|health|ready|migrate-up|migrate-down|migrate-new|generate|seed}"
     exit 1
     ;;
 esac

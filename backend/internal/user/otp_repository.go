@@ -2,6 +2,7 @@ package user
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -85,8 +86,10 @@ func (r *Repository) ConsumeOTP(ctx context.Context, id uuid.UUID) (userdb.OtpCo
 }
 
 // ConsumeOTPTx marks an OTP as used inside an existing transaction.
-// ErrNotFound means another transaction already consumed it.
 func (r *Repository) ConsumeOTPTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (userdb.OtpCode, error) {
+	if tx == nil {
+		return userdb.OtpCode{}, errors.New("user: ConsumeOTPTx requires a transaction")
+	}
 	return r.consumeOTP(ctx, r.q.WithTx(tx), id)
 }
 

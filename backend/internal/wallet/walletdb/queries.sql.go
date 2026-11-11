@@ -11,41 +11,6 @@ import (
 	"github.com/google/uuid"
 )
 
-const getAccountByCode = `-- name: GetAccountByCode :one
-SELECT id, code, type, normal_balance, currency, allow_negative, balance_minor, version, owner_user_id, created_at FROM accounts
-WHERE code = $1
-`
-
-func (q *Queries) GetAccountByCode(ctx context.Context, code string) (Account, error) {
-	row := q.db.QueryRow(ctx, getAccountByCode, code)
-	var i Account
-	err := row.Scan(
-		&i.ID,
-		&i.Code,
-		&i.Type,
-		&i.NormalBalance,
-		&i.Currency,
-		&i.AllowNegative,
-		&i.BalanceMinor,
-		&i.Version,
-		&i.OwnerUserID,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
-const getTransactionByReference = `-- name: GetTransactionByReference :one
-SELECT id FROM transactions
-WHERE reference = $1
-`
-
-func (q *Queries) GetTransactionByReference(ctx context.Context, reference string) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, getTransactionByReference, reference)
-	var id uuid.UUID
-	err := row.Scan(&id)
-	return id, err
-}
-
 const getWalletByUserCurrency = `-- name: GetWalletByUserCurrency :one
 SELECT id, user_id, account_id, currency, status, freeze_mode, frozen_reason, created_at, updated_at FROM wallets
 WHERE user_id = $1 AND currency = $2
@@ -73,59 +38,9 @@ func (q *Queries) GetWalletByUserCurrency(ctx context.Context, arg GetWalletByUs
 	return i, err
 }
 
-const insertCompletedTopUp = `-- name: InsertCompletedTopUp :one
-INSERT INTO transactions (
-    id,
-    reference,
-    kind,
-    status,
-    initiator_user_id,
-    to_wallet_id,
-    amount_minor,
-    fee_minor,
-    currency,
-    note,
-    completed_at
-) VALUES (
-    $1, $2, 'top_up', 'completed', $3, $4, $5, 0, $6, $7, now()
-)
-RETURNING id
-`
-
-type InsertCompletedTopUpParams struct {
-	ID              uuid.UUID  `json:"id"`
-	Reference       string     `json:"reference"`
-	InitiatorUserID *uuid.UUID `json:"initiator_user_id"`
-	ToWalletID      *uuid.UUID `json:"to_wallet_id"`
-	AmountMinor     int64      `json:"amount_minor"`
-	Currency        string     `json:"currency"`
-	Note            *string    `json:"note"`
-}
-
-func (q *Queries) InsertCompletedTopUp(ctx context.Context, arg InsertCompletedTopUpParams) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, insertCompletedTopUp,
-		arg.ID,
-		arg.Reference,
-		arg.InitiatorUserID,
-		arg.ToWalletID,
-		arg.AmountMinor,
-		arg.Currency,
-		arg.Note,
-	)
-	var id uuid.UUID
-	err := row.Scan(&id)
-	return id, err
-}
-
 const insertLiabilityAccount = `-- name: InsertLiabilityAccount :one
 INSERT INTO accounts (
-    id,
-    code,
-    type,
-    normal_balance,
-    currency,
-    allow_negative,
-    owner_user_id
+    id, code, type, normal_balance, currency, allow_negative, owner_user_id
 ) VALUES (
     $1, $2, 'liability', 'credit', $3, false, $4
 )
@@ -164,14 +79,9 @@ func (q *Queries) InsertLiabilityAccount(ctx context.Context, arg InsertLiabilit
 
 const insertWallet = `-- name: InsertWallet :one
 INSERT INTO wallets (
-    id,
-    user_id,
-    account_id,
-    currency,
-    status,
-    freeze_mode
+    id, user_id, account_id, currency
 ) VALUES (
-    $1, $2, $3, $4, 'active', 'none'
+    $1, $2, $3, $4
 )
 RETURNING id, user_id, account_id, currency, status, freeze_mode, frozen_reason, created_at, updated_at
 `
@@ -205,24 +115,25 @@ func (q *Queries) InsertWallet(ctx context.Context, arg InsertWalletParams) (Wal
 	return i, err
 }
 
-const listWalletBalancesByUser = `-- name: ListWalletBalancesByUser :many
+const listBalancesByUserID = `-- name: ListBalancesByUserID :many
 SELECT
-    id,
+    wallet_id,
     user_id,
     account_id,
     currency,
     status,
     freeze_mode,
+    frozen_reason,
     ledger_balance_minor,
-    pending_withdrawal_minor,
+    held_minor,
     available_minor
 FROM wallet_balances
 WHERE user_id = $1
-ORDER BY currency
+ORDER BY currency, wallet_id
 `
 
-func (q *Queries) ListWalletBalancesByUser(ctx context.Context, userID uuid.UUID) ([]WalletBalance, error) {
-	rows, err := q.db.Query(ctx, listWalletBalancesByUser, userID)
+func (q *Queries) ListBalancesByUserID(ctx context.Context, userID uuid.UUID) ([]WalletBalance, error) {
+	rows, err := q.db.Query(ctx, listBalancesByUserID, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -231,14 +142,15 @@ func (q *Queries) ListWalletBalancesByUser(ctx context.Context, userID uuid.UUID
 	for rows.Next() {
 		var i WalletBalance
 		if err := rows.Scan(
-			&i.ID,
+			&i.WalletID,
 			&i.UserID,
 			&i.AccountID,
 			&i.Currency,
 			&i.Status,
 			&i.FreezeMode,
+			&i.FrozenReason,
 			&i.LedgerBalanceMinor,
-			&i.PendingWithdrawalMinor,
+			&i.HeldMinor,
 			&i.AvailableMinor,
 		); err != nil {
 			return nil, err
@@ -251,62 +163,64 @@ func (q *Queries) ListWalletBalancesByUser(ctx context.Context, userID uuid.UUID
 	return items, nil
 }
 
-const lockUser = `-- name: LockUser :one
-SELECT id, status FROM users
-WHERE id = $1
-FOR UPDATE
-`
-
-type LockUserRow struct {
-	ID     uuid.UUID `json:"id"`
-	Status string    `json:"status"`
-}
-
-func (q *Queries) LockUser(ctx context.Context, id uuid.UUID) (LockUserRow, error) {
-	row := q.db.QueryRow(ctx, lockUser, id)
-	var i LockUserRow
-	err := row.Scan(&i.ID, &i.Status)
-	return i, err
-}
-
 const lookupRecipientByHandle = `-- name: LookupRecipientByHandle :one
-SELECT display_name, handle, phone_e164
-FROM users
-WHERE handle = $1
-  AND status = 'active'
-  AND phone_verified_at IS NOT NULL
+SELECT u.id, u.display_name, u.handle, u.phone_e164
+FROM users u
+JOIN wallets w
+  ON w.user_id = u.id
+ AND w.currency = 'ETB'
+ AND w.status <> 'closed'
+WHERE u.status = 'active'
+  AND u.phone_verified_at IS NOT NULL
+  AND u.handle = $1
 `
 
 type LookupRecipientByHandleRow struct {
-	DisplayName string  `json:"display_name"`
-	Handle      *string `json:"handle"`
-	PhoneE164   string  `json:"phone_e164"`
+	ID          uuid.UUID `json:"id"`
+	DisplayName string    `json:"display_name"`
+	Handle      *string   `json:"handle"`
+	PhoneE164   string    `json:"phone_e164"`
 }
 
 func (q *Queries) LookupRecipientByHandle(ctx context.Context, handle *string) (LookupRecipientByHandleRow, error) {
 	row := q.db.QueryRow(ctx, lookupRecipientByHandle, handle)
 	var i LookupRecipientByHandleRow
-	err := row.Scan(&i.DisplayName, &i.Handle, &i.PhoneE164)
+	err := row.Scan(
+		&i.ID,
+		&i.DisplayName,
+		&i.Handle,
+		&i.PhoneE164,
+	)
 	return i, err
 }
 
 const lookupRecipientByPhone = `-- name: LookupRecipientByPhone :one
-SELECT display_name, handle, phone_e164
-FROM users
-WHERE phone_e164 = $1
-  AND status = 'active'
-  AND phone_verified_at IS NOT NULL
+SELECT u.id, u.display_name, u.handle, u.phone_e164
+FROM users u
+JOIN wallets w
+  ON w.user_id = u.id
+ AND w.currency = 'ETB'
+ AND w.status <> 'closed'
+WHERE u.status = 'active'
+  AND u.phone_verified_at IS NOT NULL
+  AND u.phone_e164 = $1
 `
 
 type LookupRecipientByPhoneRow struct {
-	DisplayName string  `json:"display_name"`
-	Handle      *string `json:"handle"`
-	PhoneE164   string  `json:"phone_e164"`
+	ID          uuid.UUID `json:"id"`
+	DisplayName string    `json:"display_name"`
+	Handle      *string   `json:"handle"`
+	PhoneE164   string    `json:"phone_e164"`
 }
 
 func (q *Queries) LookupRecipientByPhone(ctx context.Context, phoneE164 string) (LookupRecipientByPhoneRow, error) {
 	row := q.db.QueryRow(ctx, lookupRecipientByPhone, phoneE164)
 	var i LookupRecipientByPhoneRow
-	err := row.Scan(&i.DisplayName, &i.Handle, &i.PhoneE164)
+	err := row.Scan(
+		&i.ID,
+		&i.DisplayName,
+		&i.Handle,
+		&i.PhoneE164,
+	)
 	return i, err
 }

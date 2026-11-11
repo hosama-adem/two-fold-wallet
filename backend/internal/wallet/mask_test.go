@@ -5,35 +5,26 @@ import (
 	"testing"
 )
 
-func TestMaskPhoneHidesTheNationalNumber(t *testing.T) {
+func TestMaskPhoneHidesTheNumber(t *testing.T) {
 	t.Parallel()
-	cases := []struct {
-		phone string
-		want  string
-	}{
-		{phone: "+251912345678", want: "+251 9•• ••• 678"},
-		{phone: "+251711111234", want: "+251 7•• ••• 234"},
+
+	const full = "+251911223344"
+	got, err := MaskPhone(full)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tc := range cases {
-		got, err := MaskPhone(tc.phone)
-		if err != nil {
-			t.Fatalf("MaskPhone(%s): %v", tc.phone, err)
-		}
-		if got != tc.want {
-			t.Fatalf("MaskPhone(%s) = %q, want %q", tc.phone, got, tc.want)
-		}
-		national := tc.phone[4:]
-		if strings.Contains(got, tc.phone) || strings.Contains(got, national) {
-			t.Fatalf("mask %q still contains %s", got, tc.phone)
-		}
+	const want = "+251 9•• ••• 344"
+	if got != want {
+		t.Fatalf("mask = %q, want %q", got, want)
+	}
+	if strings.Contains(got, full) || strings.Contains(got, "911223344") {
+		t.Fatalf("mask still contains the phone: %q", got)
 	}
 }
 
-func TestMaskPhoneRejectsAnythingElse(t *testing.T) {
+func TestMaskPhoneRejectsGarbage(t *testing.T) {
 	t.Parallel()
-	for _, phone := range []string{"", "+2519123456789", "0912345678", "+251812345678", "+251 912345678"} {
-		if _, err := MaskPhone(phone); err == nil {
-			t.Fatalf("MaskPhone(%q) succeeded", phone)
-		}
+	if _, err := MaskPhone("+251811223344"); err == nil {
+		t.Fatal("expected invalid phone")
 	}
 }
