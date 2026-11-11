@@ -62,3 +62,8 @@ Two lines per merged day: what you learned, what surprised you.
 
 - Learned: the number a person can spend is not the ledger balance. Pending cash-outs are holds, so available is ledger minus those rows, computed in a view. The wallet row and its liability account have to be born in the same transaction as phone verification, or a crash leaves a verified user who owes nothing and owns nothing.
 - Surprised: freeze is a fact you store now and a rule you enforce later, inside the money transaction. `GET /v1/wallets` still shows a frozen balance. `outbound` can receive; `full` cannot. Closing with money still on the books is rejected by Postgres, not by a comment.
+
+## test: property-based ledger invariants
+
+- Learned: a property is cheaper than a spreadsheet of examples — generate valid and invalid journals, then assert `debits = credits`, cache = recompute, non-negative stays non-negative, and `reverse(post(j))` restores every balance. Shrinking turns a 1,000-case failure into the smallest journal that still breaks the law.
+- Surprised: the fast path is one funded world reused across checks, with a reverse after each case — 1,000 posts stay well under a minute because setup cost is paid once, not once per draw.

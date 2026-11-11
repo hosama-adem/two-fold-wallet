@@ -111,6 +111,27 @@ Do not skip **Done when** checks. Cut polish, not correctness gates.
 
 ---
 
+## How we know the ledger is correct
+
+Anecdotes lie. Generators do not.
+
+Property tests in [`backend/internal/ledger/`](backend/internal/ledger/) hand the posting engine thousands of random journals via [`pgregory.net/rapid`](https://pkg.go.dev/pgregory.net/rapid) and assert the invariants that make “every birr, recorded twice” true:
+
+| Invariant | Where it lives |
+|---|---|
+| `sum(debits) = sum(credits)` on every accepted journal | `property_test.go` |
+| Invalid shapes never leave `NewJournal` | `property_test.go` |
+| `reverse(post(j))` restores every balance (`applyLines`) | `property_test.go` |
+| Cached balance equals Σ `BalanceDelta` / `RecomputeBalance` | `property_test.go` + `property_integration_test.go` |
+| `allow_negative = false` accounts never go below zero | both property test files |
+| Overdraft attempts are rejected and mutate nothing | `property_integration_test.go` |
+
+CI runs the ×1000 suite under 60 seconds. A failing case shrinks to the smallest smoking gun.
+
+```bash
+cd backend && go test ./internal/ledger/ -run 'TestProperty(Valid|Invalid|Flip|BalanceDelta|ApplyLines|LedgerInvariants)' -rapid.checks=1000
+```
+
 ## Principles
 
 1. **Correct before fast.** A slow transfer is a bug. A wrong balance is an incident.
