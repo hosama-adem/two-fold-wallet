@@ -1,6 +1,6 @@
 package main
 
- import (
+import (
 	"context"
 	"log/slog"
 	"os"
@@ -16,6 +16,7 @@ package main
 	"github.com/hosama-adem/twofold/backend/internal/platform/ratelimit"
 	"github.com/hosama-adem/twofold/backend/internal/session"
 	"github.com/hosama-adem/twofold/backend/internal/user"
+	"github.com/hosama-adem/twofold/backend/internal/wallet"
 )
 
 func main() {
@@ -61,6 +62,7 @@ func run() int {
 		Window: cfg.AuthRateLimitWindow,
 	})
 
+	wallets := wallet.NewService(pool)
 	authSvc := auth.NewService(auth.ServiceDeps{
 		Users:      users,
 		Sessions:   sessions,
@@ -68,13 +70,18 @@ func run() int {
 		Audit:      audits,
 		Pins:       pins,
 		Pool:       pool,
+		Wallets:    wallets,
 		SMS:        auth.LogSMSSender{Log: log},
 		Log:        log,
 		RefreshTTL: cfg.RefreshTokenTTL,
 	})
 	authHandler := auth.NewHandler(authSvc, limiter)
+	walletHandler := wallet.NewHandler(wallets, authHandler.RequireAccess(), auth.UserIDFromContext)
 
-	srv := httpserver.New(cfg, pool, log, httpserver.Options{Auth: authHandler})
+	srv := httpserver.New(cfg, pool, log, httpserver.Options{
+		Auth:    authHandler,
+		Wallets: walletHandler,
+	})
 	if err := srv.Run(ctx); err != nil {
 		log.Error("server", "error", err)
 		return 1

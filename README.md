@@ -74,7 +74,8 @@ curl -s localhost:8080/health
 curl -s localhost:8080/ready
 ```
 
-Useful targets: `migrate-down`, `migrate-new <name>`, `generate` (sqlc), `test`.  
+Useful targets: `migrate-down`, `migrate-new <name>`, `generate` (sqlc), `test`, `seed`.  
+`make seed` is dev-only. It opens `+251911000042` (`@devwallet`) and, when the ledger balance is zero, credits 500.00 ETB with a real top-up journal. It refuses `APP_ENV=production`.  
 `Makefile` mirrors the same targets when GNU make is installed. Package layout lives under `backend/internal/` per PRD §16.2.
 
 ### Auth (current)
@@ -84,6 +85,15 @@ Useful targets: `migrate-down`, `migrate-new <name>`, `generate` (sqlc), `test`.
 | Rate limits | In-memory token bucket on register / verify-phone / resend-otp / login (`AUTH_RATE_LIMIT_BURST`, `AUTH_RATE_LIMIT_WINDOW`). Both **IP** and **phone** keys must pass. Exceeded → `429` `rate_limited` + `Retry-After`. Proxies are not trusted by default (`ClientIP` = remote addr). |
 | Sessions | `GET /v1/me/sessions` lists active sessions (`current` from access `sid`). `DELETE /v1/me/sessions/{id}` is owner-only (`204` / `404`). Revoking the current session also fails subsequent Bearer checks (session row is revoked). |
 | Audit | Append-only `audit_logs`. Postgres rejects UPDATE, DELETE, and TRUNCATE. Login success/failure, session revoke, and logout go through `audit.Record`. Summaries are outcomes (`ok`, `invalid_credentials`, `via`) — the recorder rejects password, OTP, refresh token, and PIN fields before insert. |
+
+### Wallets (current)
+
+| Concern | Behavior |
+|---|---|
+| Open | `POST /v1/auth/verify-phone` activates the user and inserts one ETB liability account plus one wallet, in the same transaction. A second concurrent verify still leaves exactly one wallet. |
+| Balances | `GET /v1/wallets` returns `ledger_balance_minor` and `available_balance_minor`. Available is the ledger cache minus pending withdrawal holds. |
+| Freeze | `freeze_mode` is `none`, `debit` (can receive, cannot spend), or `full`. The check lives in `wallet.Allows` for the handler that posts money. Reading a balance does not apply it. |
+| Lookup | `GET /v1/recipients/lookup?q=` finds a person by phone or `@handle` and returns the display name plus a masked phone (`+251 9•• ••• 344`). The full number is not in the response. |
 
 ---
 

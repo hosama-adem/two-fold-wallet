@@ -9,6 +9,9 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/hosama-adem/twofold/backend/internal/audit"
@@ -16,6 +19,7 @@ import (
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpx"
 	"github.com/hosama-adem/twofold/backend/internal/session"
 	"github.com/hosama-adem/twofold/backend/internal/user"
+	"github.com/hosama-adem/twofold/backend/internal/wallet"
 )
 
 const (
@@ -44,6 +48,7 @@ type Service struct {
 	audit      *audit.Recorder
 	pins       *pin.Service
 	pool       *pgxpool.Pool
+	wallets    WalletProvisioner
 	sms        SMSSender
 	log        *slog.Logger
 	clock      Clock
@@ -58,6 +63,7 @@ type ServiceDeps struct {
 	Audit      *audit.Recorder
 	Pins       *pin.Service // optional; built automatically when nil
 	Pool       *pgxpool.Pool
+	Wallets    WalletProvisioner
 	SMS        SMSSender
 	Log        *slog.Logger
 	RefreshTTL time.Duration
@@ -86,6 +92,10 @@ func NewService(deps ServiceDeps) *Service {
 			Log:   log,
 		})
 	}
+	wallets := deps.Wallets
+	if wallets == nil && deps.Pool != nil {
+		wallets = wallet.NewService(deps.Pool)
+	}
 	return &Service{
 		users:      deps.Users,
 		sessions:   deps.Sessions,
@@ -93,11 +103,17 @@ func NewService(deps ServiceDeps) *Service {
 		audit:      deps.Audit,
 		pins:       pins,
 		pool:       deps.Pool,
+		wallets:    wallets,
 		sms:        sms,
 		log:        log,
 		clock:      systemClock{},
 		refreshTTL: refreshTTL,
 	}
+}
+
+// WalletProvisioner opens the ETB wallet in the verification transaction.
+type WalletProvisioner interface {
+	OpenETB(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (wallet.Opened, error)
 }
 
 // PIN returns the transaction-PIN verifier for money-moving handlers (FR-ID-7).
@@ -244,13 +260,51 @@ func (s *Service) VerifyPhone(ctx context.Context, in VerifyPhoneInput) (Message
 		return MessageResponse{}, httpx.ValidationFailed(genericVerifyFail)
 	}
 
-	if _, err := s.users.ConsumeOTP(ctx, otp.ID); err != nil {
-		return MessageResponse{}, httpx.ValidationFailed(genericVerifyFail)
-	}
-	if _, err := s.users.MarkPhoneVerified(ctx, u.ID); err != nil {
+	if err := s.activateWithWallet(ctx, phone, otp.ID); err != nil {
 		return MessageResponse{}, err
 	}
 	return MessageResponse{Message: "Phone verified."}, nil
+}
+
+// activateWithWallet consumes the OTP, activates the user, and opens the ETB
+// wallet in one transaction. A second concurrent verify blocks on the user
+// row, then finds the phone already verified and opens nothing.
+func (s *Service) activateWithWallet(ctx context.Context, phone string, otpID uuid.UUID) error {
+	if s.pool == nil || s.wallets == nil {
+		return httpx.Internal("Wallet provisioning is not configured.")
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	locked, err := s.users.GetByPhoneForUpdate(ctx, tx, phone)
+	if err != nil || locked.Status != "pending_verification" {
+		return httpx.ValidationFailed(genericVerifyFail)
+	}
+	if _, err := s.users.ConsumeOTPTx(ctx, tx, otpID); err != nil {
+		return httpx.ValidationFailed(genericVerifyFail)
+	}
+	if _, err := s.users.MarkPhoneVerifiedTx(ctx, tx, locked.ID); err != nil {
+		return err
+	}
+	if _, err := s.wallets.OpenETB(ctx, tx, locked.ID); err != nil {
+		if isUniqueViolation(err) {
+			return httpx.ValidationFailed(genericVerifyFail)
+		}
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 // ResendOTPInput is the resend-otp body.
