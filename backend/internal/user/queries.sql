@@ -30,12 +30,6 @@ FOR UPDATE;
 SELECT * FROM users
 WHERE phone_e164 = $1;
 
--- name: GetUserByPhoneForUpdate :one
--- Serializes concurrent phone verification for one person.
-SELECT * FROM users
-WHERE phone_e164 = $1
-FOR UPDATE;
-
 -- name: MarkPhoneVerified :one
 UPDATE users
 SET

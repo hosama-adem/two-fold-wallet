@@ -36,11 +36,10 @@ type Clock interface {
 	Now() time.Time
 }
 
-// WalletProvisioner opens the user's ETB liability account and wallet row
-// inside the verification transaction. A verified user without a wallet is
-// not a valid state, so verification refuses to commit when this is nil.
+// WalletProvisioner opens the ETB wallet inside the verification transaction.
+// A verified user without a wallet is not a valid state.
 type WalletProvisioner interface {
-	ProvisionETB(ctx context.Context, tx pgx.Tx, userID uuid.UUID) error
+	OpenETB(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (wallet.Opened, error)
 }
 
 type systemClock struct{}
@@ -116,11 +115,6 @@ func NewService(deps ServiceDeps) *Service {
 		clock:      systemClock{},
 		refreshTTL: refreshTTL,
 	}
-}
-
-// WalletProvisioner opens the ETB wallet in the verification transaction.
-type WalletProvisioner interface {
-	OpenETB(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (wallet.Opened, error)
 }
 
 // PIN returns the transaction-PIN verifier for money-moving handlers (FR-ID-7).
@@ -266,15 +260,6 @@ func (s *Service) VerifyPhone(ctx context.Context, in VerifyPhoneInput) (Message
 		_, _ = s.users.IncrementOTPAttempts(ctx, otp.ID)
 		return MessageResponse{}, httpx.ValidationFailed(genericVerifyFail)
 	}
-	if s.pool == nil || s.wallets == nil {
-		return MessageResponse{}, httpx.Internal("Phone verification is not configured.")
-	}
-
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return MessageResponse{}, err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
 
 	if err := s.activateWithWallet(ctx, phone, otp.ID); err != nil {
 		return MessageResponse{}, err

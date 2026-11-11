@@ -450,6 +450,35 @@ CREATE TABLE wallets (
 
 CREATE INDEX wallets_user_id_idx ON wallets (user_id);
 
+CREATE OR REPLACE FUNCTION wallets_require_liability_account()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    acct accounts%ROWTYPE;
+BEGIN
+    SELECT * INTO acct FROM accounts WHERE id = NEW.account_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'wallets_account_required'
+            USING ERRCODE = '23503';
+    END IF;
+    IF acct.type <> 'liability'
+       OR acct.normal_balance <> 'credit'
+       OR acct.currency <> NEW.currency
+       OR acct.owner_user_id IS DISTINCT FROM NEW.user_id
+       OR acct.allow_negative THEN
+        RAISE EXCEPTION 'wallets_account_must_be_user_liability'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER wallets_require_liability_account
+    BEFORE INSERT OR UPDATE OF account_id, user_id, currency ON wallets
+    FOR EACH ROW
+    EXECUTE PROCEDURE wallets_require_liability_account();
+
 CREATE TABLE wallet_holds (
     id            UUID PRIMARY KEY,
     wallet_id     UUID NOT NULL,

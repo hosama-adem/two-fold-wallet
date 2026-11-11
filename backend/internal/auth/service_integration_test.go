@@ -82,7 +82,7 @@ func newAuthStack(t *testing.T, sms *auth.RecordingSMSSender, clk auth.Clock, li
 		svc.WithClock(clk)
 	}
 	h := auth.NewHandler(svc, lim)
-	wh := wallet.NewHandler(wallets, h.RequireAccess())
+	wh := wallet.NewHandler(wallets, h.RequireAccess(), auth.UserIDFromContext)
 	srv := httpserver.New(config.Config{AppEnv: "test", HTTPAddr: ":0"}, pool, log, httpserver.Options{
 		Auth:    h,
 		Wallets: wh,

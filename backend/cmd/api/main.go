@@ -63,7 +63,6 @@ func run() int {
 		Window: cfg.AuthRateLimitWindow,
 	})
 
-	wallets := wallet.NewService(pool)
 	authSvc := auth.NewService(auth.ServiceDeps{
 		Users:      users,
 		Sessions:   sessions,

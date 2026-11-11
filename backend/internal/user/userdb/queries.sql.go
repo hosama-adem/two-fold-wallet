@@ -280,7 +280,6 @@ WHERE phone_e164 = $1
 FOR UPDATE
 `
 
-// Serializes concurrent phone verification for one person.
 func (q *Queries) GetUserByPhoneForUpdate(ctx context.Context, phoneE164 string) (User, error) {
 	row := q.db.QueryRow(ctx, getUserByPhoneForUpdate, phoneE164)
 	var i User

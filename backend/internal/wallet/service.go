@@ -32,6 +32,7 @@ type Opened struct {
 	WalletID  uuid.UUID
 	AccountID uuid.UUID
 	Currency  string
+	Created   bool
 }
 
 // OpenETB inserts the customer's ETB liability account and wallet.
@@ -52,7 +53,12 @@ func (s *Service) OpenETB(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (Ope
 		Currency: CurrencyETB,
 	})
 	if err == nil {
-		return Opened{WalletID: existing.ID, AccountID: existing.AccountID, Currency: existing.Currency}, nil
+		return Opened{
+			WalletID:  existing.ID,
+			AccountID: existing.AccountID,
+			Currency:  existing.Currency,
+			Created:   false,
+		}, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return Opened{}, fmt.Errorf("wallet: lookup: %w", err)
@@ -70,7 +76,7 @@ func (s *Service) OpenETB(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (Ope
 	owner := userID
 	if _, err := q.InsertLiabilityAccount(ctx, walletdb.InsertLiabilityAccountParams{
 		ID:          accountID,
-		Code:        "wallet:etb:" + userID.String(),
+		Code:        AccountCode(userID),
 		Currency:    CurrencyETB,
 		OwnerUserID: &owner,
 	}); err != nil {
@@ -86,7 +92,12 @@ func (s *Service) OpenETB(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (Ope
 	if err != nil {
 		return Opened{}, fmt.Errorf("wallet: insert: %w", err)
 	}
-	return Opened{WalletID: row.ID, AccountID: row.AccountID, Currency: row.Currency}, nil
+	return Opened{
+		WalletID:  row.ID,
+		AccountID: row.AccountID,
+		Currency:  row.Currency,
+		Created:   true,
+	}, nil
 }
 
 // Balance is one wallet as the app should show it.

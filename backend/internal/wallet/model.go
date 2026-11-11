@@ -17,13 +17,14 @@ const (
 type FreezeMode string
 
 const (
-	FreezeNone     FreezeMode = "none"
-	FreezeOutbound FreezeMode = "outbound"
-	FreezeFull     FreezeMode = "full"
+	FreezeNone FreezeMode = "none"
+	// FreezeDebit blocks sends and cash-out. Incoming credits still post.
+	FreezeDebit FreezeMode = "debit"
+	// FreezeFull blocks every movement, including receives.
+	FreezeFull FreezeMode = "full"
 )
 
 // Movement is a money action a later endpoint will ask the wallet to allow.
-// Sending and cashing out leave the wallet. Receiving enters it.
 type Movement string
 
 const (
@@ -48,7 +49,7 @@ func (g Gate) Allows(m Movement) bool {
 	case StatusClosed:
 		return false
 	case StatusFrozen:
-		if g.FreezeMode == FreezeOutbound && m == MovementReceive {
+		if g.FreezeMode == FreezeDebit && m == MovementReceive {
 			return true
 		}
 		return false
@@ -61,30 +62,4 @@ func (g Gate) Allows(m Movement) bool {
 // It fits accounts_code_format: wallet: plus a lowercase UUIDv7.
 func AccountCode(userID uuid.UUID) string {
 	return "wallet:" + userID.String()
-}
-
-// Balance is one wallet as the customer API shows it.
-// FrozenReason is intentionally absent.
-type Balance struct {
-	ID                     uuid.UUID
-	Currency               string
-	Status                 Status
-	FreezeMode             FreezeMode
-	LedgerBalanceMinor     int64
-	PendingWithdrawalMinor int64
-	AvailableMinor         int64
-}
-
-// Opened is the wallet row ProvisionETB / OpenETB just found or inserted.
-type Opened struct {
-	WalletID  uuid.UUID
-	AccountID uuid.UUID
-	Created   bool
-}
-
-// Recipient is a lookup hit. Phone is already masked.
-type Recipient struct {
-	DisplayName string
-	Handle      *string
-	PhoneMasked string
 }

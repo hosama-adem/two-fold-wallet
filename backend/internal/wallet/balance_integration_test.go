@@ -62,17 +62,13 @@ func TestOpenETBIsIdempotentAndAvailableSubtractsHolds(t *testing.T) {
 
 	holdID := uuid.Must(uuid.NewV7())
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO transactions (
-			id, reference, kind, status, initiator_user_id, from_wallet_id,
-			amount_minor, fee_minor, currency
-		) VALUES (
-			$1, $2, 'cash_out', 'pending', $3, $4, 1500, 100, 'ETB'
-		)
-	`, holdID, "hold-"+holdID.String(), userID, opened.WalletID); err != nil {
+		INSERT INTO wallet_holds (id, wallet_id, amount_minor, currency, kind, status)
+		VALUES ($1, $2, 1600, 'ETB', 'withdrawal', 'pending')
+	`, holdID, opened.WalletID); err != nil {
 		t.Fatal(err)
 	}
 
-	rows, err := walletdb.New(pool).ListWalletBalancesByUser(ctx, userID)
+	rows, err := walletdb.New(pool).ListBalancesByUserID(ctx, userID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,45 +76,45 @@ func TestOpenETBIsIdempotentAndAvailableSubtractsHolds(t *testing.T) {
 		t.Fatalf("balances = %d", len(rows))
 	}
 	row := rows[0]
-	if row.LedgerBalanceMinor != 5_000 || row.PendingWithdrawalMinor != 1_600 || row.AvailableMinor != 3_400 {
-		t.Fatalf("ledger=%d pending=%d available=%d, want 5000/1600/3400",
-			row.LedgerBalanceMinor, row.PendingWithdrawalMinor, row.AvailableMinor)
+	if row.LedgerBalanceMinor != 5_000 || row.HeldMinor != 1_600 || row.AvailableMinor != 3_400 {
+		t.Fatalf("ledger=%d held=%d available=%d, want 5000/1600/3400",
+			row.LedgerBalanceMinor, row.HeldMinor, row.AvailableMinor)
 	}
 
 	if _, err := pool.Exec(ctx, `
 		UPDATE wallets
-		SET status = 'closed', updated_at = now()
+		SET status = 'frozen', freeze_mode = 'none', updated_at = now()
 		WHERE id = $1
 	`, opened.WalletID); err == nil {
-		t.Fatal("closed a wallet that still has a ledger balance")
+		t.Fatal("accepted frozen wallet without a freeze mode")
 	} else if !isCheck(err) {
-		t.Fatalf("close: %v", err)
+		t.Fatalf("freeze consistency: %v", err)
 	}
 
 	if _, err := pool.Exec(ctx, `
 		UPDATE wallets
-		SET status = 'frozen', freeze_mode = 'outbound', frozen_reason = 'court order', updated_at = now()
+		SET status = 'frozen', freeze_mode = 'debit', frozen_reason = 'court order', updated_at = now()
 		WHERE id = $1
 	`, opened.WalletID); err != nil {
-		t.Fatalf("freeze outbound: %v", err)
+		t.Fatalf("freeze debit: %v", err)
 	}
 
-	rows, err = walletdb.New(pool).ListWalletBalancesByUser(ctx, userID)
+	rows, err = walletdb.New(pool).ListBalancesByUserID(ctx, userID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rows[0].Status != string(wallet.StatusFrozen) || rows[0].FreezeMode != string(wallet.FreezeOutbound) {
+	if rows[0].Status != string(wallet.StatusFrozen) || rows[0].FreezeMode != string(wallet.FreezeDebit) {
 		t.Fatalf("frozen row = %+v", rows[0])
 	}
 	if rows[0].AvailableMinor != 3_400 {
 		t.Fatalf("freeze changed available to %d", rows[0].AvailableMinor)
 	}
-	gate := wallet.Gate{Status: wallet.StatusFrozen, FreezeMode: wallet.FreezeOutbound}
+	gate := wallet.Gate{Status: wallet.StatusFrozen, FreezeMode: wallet.FreezeDebit}
 	if gate.Allows(wallet.MovementSend) {
-		t.Fatal("outbound freeze still allows send")
+		t.Fatal("debit freeze still allows send")
 	}
 	if !gate.Allows(wallet.MovementReceive) {
-		t.Fatal("outbound freeze blocked receive")
+		t.Fatal("debit freeze blocked receive")
 	}
 }
 

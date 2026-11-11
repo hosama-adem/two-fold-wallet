@@ -43,6 +43,36 @@ CREATE TABLE wallets (
 
 CREATE INDEX wallets_user_id_idx ON wallets (user_id);
 
+-- A wallet must sit on the owner's ETB liability account.
+CREATE OR REPLACE FUNCTION wallets_require_liability_account()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    acct accounts%ROWTYPE;
+BEGIN
+    SELECT * INTO acct FROM accounts WHERE id = NEW.account_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'wallets_account_required'
+            USING ERRCODE = '23503';
+    END IF;
+    IF acct.type <> 'liability'
+       OR acct.normal_balance <> 'credit'
+       OR acct.currency <> NEW.currency
+       OR acct.owner_user_id IS DISTINCT FROM NEW.user_id
+       OR acct.allow_negative THEN
+        RAISE EXCEPTION 'wallets_account_must_be_user_liability'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER wallets_require_liability_account
+    BEFORE INSERT OR UPDATE OF account_id, user_id, currency ON wallets
+    FOR EACH ROW
+    EXECUTE PROCEDURE wallets_require_liability_account();
+
 -- Pending withdrawal reservations. Week 4 inserts these when cash-out starts.
 -- Until then the table is empty and available equals the ledger balance.
 CREATE TABLE wallet_holds (
@@ -94,12 +124,14 @@ LEFT JOIN (
 -- +goose Down
 DROP VIEW IF EXISTS wallet_balances;
 DROP TABLE IF EXISTS wallet_holds;
+DROP TRIGGER IF EXISTS wallets_require_liability_account ON wallets;
+DROP FUNCTION IF EXISTS wallets_require_liability_account();
 DROP TABLE IF EXISTS wallets;
 
 -- Wallet rows are gone. Drop the liability accounts that never received a
 -- posting. Accounts with history stay: postings are append-only.
 DELETE FROM accounts
-WHERE code LIKE 'wallet:etb:%'
+WHERE code LIKE 'wallet:%'
   AND owner_user_id IS NOT NULL
   AND NOT EXISTS (
       SELECT 1 FROM postings p WHERE p.account_id = accounts.id
