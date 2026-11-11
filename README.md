@@ -31,6 +31,8 @@ The UI should feel sharp. The backend is why the project exists.
 | [`docs/PRD.md`](docs/PRD.md) | Product, ledger, concurrency, API, NFRs |
 | [`docs/implementation-plan.md`](docs/implementation-plan.md) | 49 days · 7 milestones · one issue per day |
 | [`docs/design-system.md`](docs/design-system.md) | Colour, type, money formatting, components |
+| [`docs/adr/0001-double-entry-ledger.md`](docs/adr/0001-double-entry-ledger.md) | ADR: direction + positive `amount_minor` |
+| [`docs/adr/0002-idempotency.md`](docs/adr/0002-idempotency.md) | ADR: Idempotency-Key claim, hash, replay |
 | [`docs/brand/palette.html`](docs/brand/palette.html) | Live WCAG contrast check for the palette |
 | [`docs/issues/rebrand-to-twofold.md`](docs/issues/rebrand-to-twofold.md) | Day 1 GitHub issue body (paste into GitHub) |
 | [`docs/pdf/`](docs/pdf/) | Canonical PDF originals of PRD + plan |
@@ -94,6 +96,16 @@ Useful targets: `migrate-down`, `migrate-new <name>`, `generate` (sqlc), `test`,
 | Balances | `GET /v1/wallets` returns `ledger_balance_minor` and `available_balance_minor`. Available is the ledger cache minus pending withdrawal holds. |
 | Freeze | `freeze_mode` is `none`, `debit` (can receive, cannot spend), or `full`. The check lives in `wallet.Allows` for the handler that posts money. Reading a balance does not apply it. |
 | Lookup | `GET /v1/recipients/lookup?q=` finds a person by phone or `@handle` and returns the display name plus a masked phone (`+251 9•• ••• 344`). The full number is not in the response. |
+
+### Idempotency (current)
+
+| Concern | Behavior |
+|---|---|
+| Header | Routes that opt in require `Idempotency-Key` (UUID v4), scoped per user. See [`docs/adr/0002-idempotency.md`](docs/adr/0002-idempotency.md). |
+| Hash | `sha256(method + path + canonical JSON body)`. Key order in the JSON does not matter. |
+| Replay | Same key + same body → stored status + body with `Idempotent-Replayed: true`. |
+| Conflicts | Same key + different body → `422 idempotency_key_reused`. Concurrent in-flight → `409 request_in_progress` + `Retry-After: 1`. |
+| Expiry | Keys live 24 hours. `DeleteExpired` is ready; the cleanup job is Day 25. Transfers mount the middleware on Day 15. |
 
 ---
 
