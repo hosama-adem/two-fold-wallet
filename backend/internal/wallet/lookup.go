@@ -11,42 +11,47 @@ import (
 // Handle is 3–20 chars: lowercase letters, digits, underscore (FR-ID-9).
 var handlePattern = regexp.MustCompile(`^[a-z0-9_]{3,20}$`)
 
-type queryKind int
+// QueryKind is how a recipient lookup string was interpreted.
+type QueryKind int
 
 const (
-	queryPhone queryKind = iota
-	queryHandle
+	// QueryPhone means the input normalized to E.164.
+	QueryPhone QueryKind = iota
+	// QueryHandle means the input is an @handle (with or without @).
+	QueryHandle
 )
 
-type lookupQuery struct {
-	kind  queryKind
-	value string
+// LookupQuery is a normalized recipient lookup.
+type LookupQuery struct {
+	Kind  QueryKind
+	Value string
 }
 
-func parseLookup(raw string) (lookupQuery, error) {
+// ParseLookup turns a phone or @handle into a normalized lookup query.
+func ParseLookup(raw string) (LookupQuery, error) {
 	q := strings.TrimSpace(raw)
 	if q == "" || len(q) > 32 {
-		return lookupQuery{}, httpx.ValidationFailed("Enter a phone number or @handle.")
+		return LookupQuery{}, httpx.ValidationFailed("Enter a phone number or @handle.")
 	}
 	if strings.HasPrefix(q, "@") {
 		handle := strings.ToLower(strings.TrimPrefix(q, "@"))
 		if !handlePattern.MatchString(handle) {
-			return lookupQuery{}, httpx.ValidationFailed("Handle must be 3–20 characters: lowercase letters, digits, or underscore.")
+			return LookupQuery{}, httpx.ValidationFailed("Handle must be 3–20 characters: lowercase letters, digits, or underscore.")
 		}
-		return lookupQuery{kind: queryHandle, value: handle}, nil
+		return LookupQuery{Kind: QueryHandle, Value: handle}, nil
 	}
 	if looksLikePhone(q) {
 		normalized, err := phone.Normalize(q)
 		if err != nil {
-			return lookupQuery{}, httpx.ValidationFailed("Phone must be an Ethiopian mobile number in E.164 (+2519… or +2517…).")
+			return LookupQuery{}, httpx.ValidationFailed("Phone must be an Ethiopian mobile number in E.164 (+2519… or +2517…).")
 		}
-		return lookupQuery{kind: queryPhone, value: normalized}, nil
+		return LookupQuery{Kind: QueryPhone, Value: normalized}, nil
 	}
 	handle := strings.ToLower(q)
 	if !handlePattern.MatchString(handle) {
-		return lookupQuery{}, httpx.ValidationFailed("Enter a phone number or @handle.")
+		return LookupQuery{}, httpx.ValidationFailed("Enter a phone number or @handle.")
 	}
-	return lookupQuery{kind: queryHandle, value: handle}, nil
+	return LookupQuery{Kind: QueryHandle, Value: handle}, nil
 }
 
 func looksLikePhone(q string) bool {

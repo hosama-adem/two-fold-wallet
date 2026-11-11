@@ -161,22 +161,22 @@ func (s *Service) Lookup(ctx context.Context, raw string) (Recipient, error) {
 	if s.pool == nil {
 		return Recipient{}, httpx.Internal("Wallet store is not configured.")
 	}
-	query, err := parseLookup(raw)
+	query, err := ParseLookup(raw)
 	if err != nil {
 		return Recipient{}, err
 	}
 
 	q := walletdb.New(s.pool)
 	var found recipientRow
-	switch query.kind {
-	case queryPhone:
-		row, err := q.LookupRecipientByPhone(ctx, query.value)
+	switch query.Kind {
+	case QueryPhone:
+		row, err := q.LookupRecipientByPhone(ctx, query.Value)
 		if err != nil {
 			return Recipient{}, lookupError(err)
 		}
 		found = recipientRow{id: row.ID, displayName: row.DisplayName, handle: row.Handle, phone: row.PhoneE164}
-	case queryHandle:
-		handle := query.value
+	case QueryHandle:
+		handle := query.Value
 		row, err := q.LookupRecipientByHandle(ctx, &handle)
 		if err != nil {
 			return Recipient{}, lookupError(err)
