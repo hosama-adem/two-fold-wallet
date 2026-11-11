@@ -37,6 +37,18 @@ type AuditLog struct {
 	CreatedAt   time.Time  `json:"created_at"`
 }
 
+type IdempotencyKey struct {
+	UserID              uuid.UUID `json:"user_id"`
+	Key                 string    `json:"key"`
+	RequestHash         string    `json:"request_hash"`
+	State               string    `json:"state"`
+	ResponseCode        *int32    `json:"response_code"`
+	ResponseBody        []byte    `json:"response_body"`
+	ResponseContentType *string   `json:"response_content_type"`
+	CreatedAt           time.Time `json:"created_at"`
+	ExpiresAt           time.Time `json:"expires_at"`
+}
+
 type JournalEntry struct {
 	ID                uuid.UUID  `json:"id"`
 	TransactionID     *uuid.UUID `json:"transaction_id"`
