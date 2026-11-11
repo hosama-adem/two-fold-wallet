@@ -16,6 +16,16 @@ RETURNING *;
 SELECT * FROM users
 WHERE id = $1;
 
+-- name: GetUserByIDForUpdate :one
+SELECT * FROM users
+WHERE id = $1
+FOR UPDATE;
+
+-- name: GetUserByPhoneForUpdate :one
+SELECT * FROM users
+WHERE phone_e164 = $1
+FOR UPDATE;
+
 -- name: GetUserByPhone :one
 SELECT * FROM users
 WHERE phone_e164 = $1;

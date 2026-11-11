@@ -51,6 +51,7 @@ func run() int {
 	users := user.NewRepository(pool)
 	sessions := session.NewRepository(pool)
 	audits := audit.NewRecorder(pool)
+	wallets := wallet.NewService(pool)
 	pins := pin.New(pin.Deps{
 		Users: users,
 		Audit: audits,
