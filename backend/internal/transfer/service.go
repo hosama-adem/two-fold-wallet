@@ -355,8 +355,9 @@ func checkRecipient(w lockedWallet) error {
 
 // buildP2PJournal matches PRD §7.3 for a transfer with fee 0:
 // Debit sender amount / Credit recipient amount.
-// Day 17 adds the fee_revenue credit when fee_minor > 0; hot system rows
-// stay unlocked at the transfer layer (PRD §8.2).
+// Day 17 adds the fee_revenue credit when fee_minor > 0. That line is a
+// posting, not a locked row: hot system accounts stay unlocked (ADR 0003,
+// PRD §8.2).
 func buildP2PJournal(fromAccount, toAccount uuid.UUID, amount, fee int64, currency, ref string) (ledger.Journal, error) {
 	_ = ref
 	if fee != 0 {

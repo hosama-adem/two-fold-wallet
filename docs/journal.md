@@ -67,3 +67,8 @@ Two lines per merged day: what you learned, what surprised you.
 
 - Learned: a property is cheaper than a spreadsheet of examples — generate valid and invalid journals, then assert `debits = credits`, cache = recompute, non-negative stays non-negative, and `reverse(post(j))` restores every balance. Shrinking turns a 1,000-case failure into the smallest journal that still breaks the law.
 - Surprised: the fast path is one funded world reused across checks, with a reverse after each case — 1,000 posts stay well under a minute because setup cost is paid once, not once per draw.
+
+## test: concurrency suite — 1,000 parallel transfers, zero drift
+
+- Learned: A→B and B→A stay deadlock-free only when both lock the two wallets in the same sorted id order. The waiter blocks on the first lock, then reads the balance the winner committed, which is why a drain cannot cross zero.
+- Surprised: the hot row is the dangerous one. Locking `fee_revenue` would make every transfer in the platform queue on a single tuple, so those system accounts stay unlocked and the drift job owns their cache. Argon2 is also the wrong thing to measure here — a thousand PIN hashes would hide the ledger — so the suite keeps the real handler and skips the hasher.

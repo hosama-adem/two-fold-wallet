@@ -33,6 +33,7 @@ The UI should feel sharp. The backend is why the project exists.
 | [`docs/design-system.md`](docs/design-system.md) | Colour, type, money formatting, components |
 | [`docs/adr/0001-double-entry-ledger.md`](docs/adr/0001-double-entry-ledger.md) | ADR: direction + positive `amount_minor` |
 | [`docs/adr/0002-idempotency.md`](docs/adr/0002-idempotency.md) | ADR: Idempotency-Key claim, hash, replay |
+| [`docs/adr/0003-lock-ordering.md`](docs/adr/0003-lock-ordering.md) | ADR: sorted wallet locks, hot system accounts stay unlocked |
 | [`docs/brand/palette.html`](docs/brand/palette.html) | Live WCAG contrast check for the palette |
 | [`docs/issues/rebrand-to-twofold.md`](docs/issues/rebrand-to-twofold.md) | Day 1 GitHub issue body (paste into GitHub) |
 | [`docs/pdf/`](docs/pdf/) | Canonical PDF originals of PRD + plan |
@@ -76,7 +77,7 @@ curl -s localhost:8080/health
 curl -s localhost:8080/ready
 ```
 
-Useful targets: `migrate-down`, `migrate-new <name>`, `generate` (sqlc), `test`, `seed`.  
+Useful targets: `migrate-down`, `migrate-new <name>`, `generate` (sqlc), `test`, `test-concurrency`, `seed`.  
 `make seed` is dev-only. It opens `+251911000042` (`@devwallet`) and, when the ledger balance is zero, credits 500.00 ETB with a real top-up journal. It refuses `APP_ENV=production`.  
 `Makefile` mirrors the same targets when GNU make is installed. Package layout lives under `backend/internal/` per PRD §16.2.
 
@@ -106,6 +107,14 @@ Useful targets: `migrate-down`, `migrate-new <name>`, `generate` (sqlc), `test`,
 | Replay | Same key + same body → stored status + body with `Idempotent-Replayed: true`. |
 | Conflicts | Same key + different body → `422 idempotency_key_reused`. Concurrent in-flight → `409 request_in_progress` + `Retry-After: 1`. |
 | Expiry | Keys live 24 hours. `DeleteExpired` is ready; the cleanup job is Day 25. Transfers mount the middleware on Day 15. |
+
+### Concurrency (current)
+
+| Concern | Behavior |
+|---|---|
+| Lock order | `POST /v1/transfers` locks both wallets and their liability accounts in sorted wallet-id order before it reads the available balance. A→B and B→A take that same order, so neither side holds the row the other is waiting for. |
+| Hot rows | `fee_revenue` and `provider_clearing:*` stay unlocked. A peer transfer does not put them in the journal, and a later fee line must not pull them into the lock set. See [`docs/adr/0003-lock-ordering.md`](docs/adr/0003-lock-ordering.md). |
+| Proof | `make test-concurrency` (or `./dev.sh test-concurrency`) fires 500 transfers each way, ten debits against one balance, and 50 requests on one `Idempotency-Key`. Twenty passes, with `-race`. Deadlock (`40P01`) fails the build. |
 
 ---
 
@@ -143,6 +152,8 @@ CI runs the ×1000 suite under 60 seconds. A failing case shrinks to the smalles
 ```bash
 cd backend && go test ./internal/ledger/ -run 'TestProperty(Valid|Invalid|Flip|BalanceDelta|ApplyLines|LedgerInvariants)' -rapid.checks=1000
 ```
+
+The other half of that claim is contention. `make test-concurrency` runs 1,000 opposing transfers, a ten-way drain, and a fifty-way idempotency collision — twenty times, with the race detector. Zero drift, no negative balance, no deadlock.
 
 ## Principles
 

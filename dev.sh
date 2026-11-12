@@ -39,6 +39,11 @@ case "$cmd" in
     # -p 1: packages may share one Postgres; avoid migrate/user races
     cd "$BACKEND" && go test -p 1 ./...
     ;;
+  test-concurrency)
+    # 500 A→B + 500 B→A, a 10-way drain, and a 50-way idempotency race.
+    # Twenty passes with the race detector. Needs a C compiler for -race.
+    cd "$BACKEND" && go test -race -count=20 -timeout 40m -p 1 ./internal/transfer/ -run '^TestConcurrency'
+    ;;
   vet|lint)
     cd "$BACKEND" && go vet ./...
     echo "lint ok"
@@ -73,7 +78,7 @@ case "$cmd" in
     cd "$BACKEND" && go run ./cmd/seed
     ;;
   *)
-    echo "usage: ./dev.sh {up|down|run|build|test|vet|lint|health|ready|migrate-up|migrate-down|migrate-new|generate|seed}"
+    echo "usage: ./dev.sh {up|down|run|build|test|test-concurrency|vet|lint|health|ready|migrate-up|migrate-down|migrate-new|generate|seed}"
     exit 1
     ;;
 esac

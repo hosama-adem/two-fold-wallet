@@ -142,9 +142,11 @@ func writeMovement(ctx context.Context, tx pgx.Tx, m movement) (uuid.UUID, error
 // lockAccounts takes FOR UPDATE in sorted id order. Two journals that share
 // accounts then cannot each hold one row and wait for the other.
 //
-// Every account in the journal is locked, including system accounts. Skipping
-// those hot rows would leave balance_after_minor computed from a stale cache.
-// The cache stays provable on every account this way.
+// Every account present in the journal is locked, so balance_after_minor is
+// read from the row this transaction holds. Peer transfers keep hot system
+// accounts out of that set on purpose (ADR 0003): locking fee_revenue or a
+// provider clearing row would make every transfer wait on one row. Their
+// postings stay the source of truth; the drift job owns that cache.
 func lockAccounts(ctx context.Context, q *ledgerdb.Queries, lines []Line) (map[uuid.UUID]*accountState, error) {
 	ids := accountIDs(lines)
 	states := make(map[uuid.UUID]*accountState, len(ids))
