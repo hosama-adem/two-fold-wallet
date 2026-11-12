@@ -220,7 +220,7 @@ func TestConcurrencySystemAccountsStayUnlocked(t *testing.T) {
 
 	sender := w.openUser(t, "Abel Bekele")
 	recipient := w.openUser(t, "Selam Bekele")
-	w.fund(t, sender.accountID, 5_000)
+	w.fund(t, sender.accountID, 50_000)
 
 	before := systemBalances(t, ctx, w.pool)
 	release := lockSystemAccounts(t, w.pool)
@@ -228,6 +228,7 @@ func TestConcurrencySystemAccountsStayUnlocked(t *testing.T) {
 
 	reqCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	// amount 100 is under the P2P waive → fee 0, no fee_revenue line.
 	out := sendTransferCtx(w.srv, sender.token, transferBody(t, recipient.phone, 100), uuid.NewString(), reqCtx)
 	if out.status != http.StatusCreated {
 		w.failf(t, "transfer blocked or failed while system accounts were locked (%s) — hot rows must stay unlocked", out)
@@ -256,6 +257,76 @@ func TestConcurrencySystemAccountsStayUnlocked(t *testing.T) {
 	after := systemBalances(t, ctx, w.pool)
 	if !slices.Equal(before, after) {
 		t.Fatalf("system balances changed while a peer transfer ran: before %v after %v", before, after)
+	}
+}
+
+func TestConcurrencyFeeLineDoesNotLockFeeRevenue(t *testing.T) {
+	// ADR 0003: the fee_revenue posting must not take FOR UPDATE or refresh the
+	// cache. (An external FOR UPDATE on fee_revenue still blocks the FK check
+	// on insert — that is why we do not lock the hot row on the send path.)
+	w := newWorld(t)
+	ctx := context.Background()
+
+	sender := w.openUser(t, "Abel Bekele")
+	recipient := w.openUser(t, "Selam Bekele")
+	w.fund(t, sender.accountID, 50_000)
+
+	const amount int64 = 20_000 // above waive → fee 100
+	const wantFee int64 = 100
+
+	feeBefore := accountBalanceByCode(t, ctx, w.pool, ledger.CodeFeeRevenue)
+
+	body := transferBody(t, recipient.phone, amount)
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	payload["expected_fee_minor"] = wantFee
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := sendTransfer(w.srv, sender.token, body, uuid.NewString())
+	if out.status != http.StatusCreated {
+		w.failf(t, "fee transfer failed (%s)", out)
+	}
+	w.assertNoContention(t)
+
+	var created transfer.Result
+	if err := json.Unmarshal(out.body, &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Transaction.FeeMinor != wantFee {
+		t.Fatalf("fee=%d want %d", created.Transaction.FeeMinor, wantFee)
+	}
+
+	var feeLines int
+	err = w.pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM postings p
+		JOIN journal_entries j ON j.id = p.journal_id
+		JOIN accounts a ON a.id = p.account_id
+		WHERE j.transaction_id = $1
+		  AND a.code = 'fee_revenue'
+	`, created.Transaction.ID).Scan(&feeLines)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if feeLines != 1 {
+		t.Fatalf("fee_revenue lines=%d, want 1", feeLines)
+	}
+
+	feeAfter := accountBalanceByCode(t, ctx, w.pool, ledger.CodeFeeRevenue)
+	if feeAfter != feeBefore {
+		t.Fatalf("fee_revenue cache moved %d→%d; hot rows must skip persist (ADR 0003)", feeBefore, feeAfter)
+	}
+	recomputed, err := ledger.RecomputeBalance(ctx, w.pool, feeAccountID(t, ctx, w.pool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recomputed == feeAfter {
+		t.Fatalf("expected posting drift on fee_revenue cache=%d recomputed=%d", feeAfter, recomputed)
 	}
 }
 
@@ -508,6 +579,24 @@ func fanOut(n int, fn func(i int) outcome) []outcome {
 func accountBalance(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) int64 {
 	t.Helper()
 	acct, err := ledgerdb.New(pool).GetAccountByID(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return acct.BalanceMinor
+}
+
+func feeAccountID(t *testing.T, ctx context.Context, pool *pgxpool.Pool) uuid.UUID {
+	t.Helper()
+	acct, err := ledgerdb.New(pool).GetAccountByCode(ctx, ledger.CodeFeeRevenue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return acct.ID
+}
+
+func accountBalanceByCode(t *testing.T, ctx context.Context, pool *pgxpool.Pool, code string) int64 {
+	t.Helper()
+	acct, err := ledgerdb.New(pool).GetAccountByCode(ctx, code)
 	if err != nil {
 		t.Fatal(err)
 	}

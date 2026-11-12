@@ -38,6 +38,18 @@ type AuditLog struct {
 	CreatedAt   time.Time       `json:"created_at"`
 }
 
+type FeeRule struct {
+	ID              uuid.UUID `json:"id"`
+	Kind            string    `json:"kind"`
+	Tier            int16     `json:"tier"`
+	FlatMinor       int64     `json:"flat_minor"`
+	RateBps         int32     `json:"rate_bps"`
+	MinMinor        int64     `json:"min_minor"`
+	MaxMinor        int64     `json:"max_minor"`
+	WaiveBelowMinor int64     `json:"waive_below_minor"`
+	EffectiveFrom   time.Time `json:"effective_from"`
+}
+
 type IdempotencyKey struct {
 	UserID              uuid.UUID `json:"user_id"`
 	Key                 string    `json:"key"`

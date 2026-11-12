@@ -568,3 +568,42 @@ CREATE TABLE idempotency_keys (
 
 CREATE INDEX idempotency_keys_expires_at_idx ON idempotency_keys (expires_at);
 
+CREATE TABLE fee_rules (
+    id                 UUID PRIMARY KEY,
+    kind               TEXT NOT NULL,
+    tier               SMALLINT NOT NULL,
+    flat_minor         BIGINT NOT NULL,
+    rate_bps           INTEGER NOT NULL,
+    min_minor          BIGINT NOT NULL,
+    max_minor          BIGINT NOT NULL,
+    waive_below_minor  BIGINT NOT NULL DEFAULT 0,
+    effective_from     TIMESTAMPTZ NOT NULL,
+
+    CONSTRAINT fee_rules_kind_known CHECK (
+        kind IN (
+            'p2p',
+            'top_up',
+            'cash_out',
+            'merchant_payment',
+            'money_request',
+            'adjustment'
+        )
+    ),
+    CONSTRAINT fee_rules_tier_range CHECK (tier BETWEEN 0 AND 2),
+    CONSTRAINT fee_rules_flat_nonneg CHECK (flat_minor >= 0 AND flat_minor <= 1000000000000000),
+    CONSTRAINT fee_rules_rate_bps_range CHECK (rate_bps >= 0 AND rate_bps <= 10000),
+    CONSTRAINT fee_rules_min_nonneg CHECK (min_minor >= 0 AND min_minor <= 1000000000000000),
+    CONSTRAINT fee_rules_max_bounds CHECK (
+        max_minor >= min_minor AND max_minor <= 1000000000000000
+    ),
+    CONSTRAINT fee_rules_waive_nonneg CHECK (
+        waive_below_minor >= 0 AND waive_below_minor <= 1000000000000000
+    )
+);
+
+CREATE UNIQUE INDEX fee_rules_kind_tier_effective_uidx
+    ON fee_rules (kind, tier, effective_from);
+
+CREATE INDEX fee_rules_lookup_idx
+    ON fee_rules (kind, tier, effective_from DESC);
+

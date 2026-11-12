@@ -15,7 +15,9 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/hosama-adem/twofold/backend/internal/fee"
 	"github.com/hosama-adem/twofold/backend/internal/ledger"
+	"github.com/hosama-adem/twofold/backend/internal/ledger/ledgerdb"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpx"
 	"github.com/hosama-adem/twofold/backend/internal/transfer/transferdb"
 	"github.com/hosama-adem/twofold/backend/internal/wallet"
@@ -33,11 +35,15 @@ const (
 // Service posts peer-to-peer transfers.
 type Service struct {
 	pool *pgxpool.Pool
+	fees *fee.Service
 }
 
 // NewService builds a transfer service on a pgx pool.
 func NewService(pool *pgxpool.Pool) *Service {
-	return &Service{pool: pool}
+	return &Service{
+		pool: pool,
+		fees: fee.NewService(pool),
+	}
 }
 
 // Request is a validated send intent.
@@ -73,6 +79,30 @@ type Transaction struct {
 	IdempotencyKey *string    `json:"idempotency_key,omitempty"`
 }
 
+// PreviewRequest is a dry-run send quote.
+type PreviewRequest struct {
+	SenderUserID   uuid.UUID
+	RecipientQuery string
+	AmountMinor    int64
+	Currency       string
+}
+
+// PreviewResult is what the confirm screen shows. No money moves.
+type PreviewResult struct {
+	AmountMinor     int64             `json:"amount_minor"`
+	FeeMinor        int64             `json:"fee_minor"`
+	TotalDebitMinor int64             `json:"total_debit_minor"`
+	Currency        string            `json:"currency"`
+	Recipient       PreviewRecipient  `json:"recipient"`
+}
+
+// PreviewRecipient is the identity card on the confirm screen.
+type PreviewRecipient struct {
+	DisplayName string  `json:"display_name"`
+	Handle      *string `json:"handle,omitempty"`
+	PhoneMasked string  `json:"phone_masked"`
+}
+
 type lockedWallet struct {
 	WalletID           uuid.UUID
 	UserID             uuid.UUID
@@ -85,16 +115,64 @@ type lockedWallet struct {
 	AvailableMinor     int64
 }
 
+type resolvedRecipient struct {
+	UserID      uuid.UUID
+	DisplayName string
+	Handle      *string
+	PhoneE164   string
+}
+
+// Preview returns amount, fee, total debit, and recipient display — and moves
+// nothing (FR-TRF-2).
+func (s *Service) Preview(ctx context.Context, in PreviewRequest) (PreviewResult, error) {
+	if s.pool == nil {
+		return PreviewResult{}, httpx.Internal("Transfer store is not configured.")
+	}
+	if err := validatePreview(in); err != nil {
+		return PreviewResult{}, err
+	}
+
+	recipient, err := s.resolveRecipient(ctx, in.RecipientQuery)
+	if err != nil {
+		return PreviewResult{}, err
+	}
+	if recipient.UserID == in.SenderUserID {
+		return PreviewResult{}, errSelfTransfer()
+	}
+
+	feeMinor, err := s.fees.ForAmount(ctx, in.SenderUserID, kindP2P, in.AmountMinor)
+	if err != nil {
+		return PreviewResult{}, err
+	}
+
+	masked, err := wallet.MaskPhone(recipient.PhoneE164)
+	if err != nil {
+		return PreviewResult{}, httpx.Internal("Could not mask phone.")
+	}
+
+	return PreviewResult{
+		AmountMinor:     in.AmountMinor,
+		FeeMinor:        feeMinor,
+		TotalDebitMinor: in.AmountMinor + feeMinor,
+		Currency:        in.Currency,
+		Recipient: PreviewRecipient{
+			DisplayName: recipient.DisplayName,
+			Handle:      recipient.Handle,
+			PhoneMasked: masked,
+		},
+	}, nil
+}
+
 // Transfer moves amount_minor from the sender's ETB wallet to the recipient.
 //
 // Inside one database transaction:
 //  1. Resolve the recipient (phone or @handle).
 //  2. Lock both wallets (and their accounts) in sorted wallet-id order.
-//  3. Check freeze, self-send, and available balance.
+//  3. Check freeze, self-send, and available balance (amount + fee).
 //  4. Insert transactions as pending, post the p2p journal, mark completed.
 //
-// Fee rules land on Day 17. Until then the computed fee is always 0 and the
-// journal is Dr sender / Cr recipient for amount_minor (PRD §7.3 with fee 0).
+// The fee is computed from fee_rules. expected_fee_minor must match or the
+// call returns 409 fee_changed and moves nothing (FR-TRF-3, PRD §7.3).
 func (s *Service) Transfer(ctx context.Context, in Request) (Result, error) {
 	if s.pool == nil {
 		return Result{}, httpx.Internal("Transfer store is not configured.")
@@ -103,17 +181,18 @@ func (s *Service) Transfer(ctx context.Context, in Request) (Result, error) {
 		return Result{}, err
 	}
 
-	recipientUserID, err := s.resolveRecipient(ctx, in.RecipientQuery)
+	recipient, err := s.resolveRecipient(ctx, in.RecipientQuery)
 	if err != nil {
 		return Result{}, err
 	}
-	if recipientUserID == in.SenderUserID {
+	if recipient.UserID == in.SenderUserID {
 		return Result{}, errSelfTransfer()
 	}
 
-	// Day 15: fee is always zero. Clients still send expected_fee_minor so
-	// Day 17 can reject a stale preview with 409 fee_changed.
-	const feeMinor int64 = 0
+	feeMinor, err := s.fees.ForAmount(ctx, in.SenderUserID, kindP2P, in.AmountMinor)
+	if err != nil {
+		return Result{}, err
+	}
 	if in.ExpectedFeeMinor != feeMinor {
 		return Result{}, errFeeChanged(in.ExpectedFeeMinor, feeMinor)
 	}
@@ -137,7 +216,7 @@ func (s *Service) Transfer(ctx context.Context, in Request) (Result, error) {
 		return Result{}, err
 	}
 	toWallet, err := q.GetWalletByUserCurrency(ctx, transferdb.GetWalletByUserCurrencyParams{
-		UserID:   recipientUserID,
+		UserID:   recipient.UserID,
 		Currency: in.Currency,
 	})
 	if err != nil {
@@ -205,7 +284,11 @@ func (s *Service) Transfer(ctx context.Context, in Request) (Result, error) {
 		return Result{}, mapInsertError(err)
 	}
 
-	journal, err := buildP2PJournal(from.AccountID, to.AccountID, in.AmountMinor, feeMinor, in.Currency, ref)
+	feeAccountID, err := feeRevenueAccountID(ctx, tx)
+	if err != nil {
+		return Result{}, err
+	}
+	journal, err := buildP2PJournal(from.AccountID, to.AccountID, feeAccountID, in.AmountMinor, feeMinor, in.Currency)
 	if err != nil {
 		return Result{}, err
 	}
@@ -247,6 +330,22 @@ func (s *Service) Transfer(ctx context.Context, in Request) (Result, error) {
 	return Result{Transaction: transactionFrom(completed)}, nil
 }
 
+func validatePreview(in PreviewRequest) error {
+	if in.SenderUserID == uuid.Nil {
+		return httpx.ValidationFailed("User id is required.")
+	}
+	if strings.TrimSpace(in.RecipientQuery) == "" {
+		return httpx.ValidationFailed("Recipient is required.")
+	}
+	if in.Currency != wallet.CurrencyETB && in.Currency != ledger.CurrencyETB {
+		return httpx.ValidationFailed("Currency must be ETB.")
+	}
+	if in.AmountMinor <= 0 || in.AmountMinor > ledger.MaxAmountMinor {
+		return httpx.ValidationFailed("Amount must be a positive amount within limits.")
+	}
+	return nil
+}
+
 func validateRequest(in Request) error {
 	if in.SenderUserID == uuid.Nil {
 		return httpx.ValidationFailed("User id is required.")
@@ -269,28 +368,38 @@ func validateRequest(in Request) error {
 	return nil
 }
 
-func (s *Service) resolveRecipient(ctx context.Context, raw string) (uuid.UUID, error) {
+func (s *Service) resolveRecipient(ctx context.Context, raw string) (resolvedRecipient, error) {
 	query, err := wallet.ParseLookup(raw)
 	if err != nil {
-		return uuid.Nil, err
+		return resolvedRecipient{}, err
 	}
 	q := transferdb.New(s.pool)
 	switch query.Kind {
 	case wallet.QueryPhone:
 		row, err := q.LookupRecipientByPhone(ctx, query.Value)
 		if err != nil {
-			return uuid.Nil, lookupError(err)
+			return resolvedRecipient{}, lookupError(err)
 		}
-		return row.ID, nil
+		return resolvedRecipient{
+			UserID:      row.ID,
+			DisplayName: row.DisplayName,
+			Handle:      row.Handle,
+			PhoneE164:   row.PhoneE164,
+		}, nil
 	case wallet.QueryHandle:
 		handle := query.Value
 		row, err := q.LookupRecipientByHandle(ctx, &handle)
 		if err != nil {
-			return uuid.Nil, lookupError(err)
+			return resolvedRecipient{}, lookupError(err)
 		}
-		return row.ID, nil
+		return resolvedRecipient{
+			UserID:      row.ID,
+			DisplayName: row.DisplayName,
+			Handle:      row.Handle,
+			PhoneE164:   row.PhoneE164,
+		}, nil
 	default:
-		return uuid.Nil, httpx.ValidationFailed("Enter a phone number or @handle.")
+		return resolvedRecipient{}, httpx.ValidationFailed("Enter a phone number or @handle.")
 	}
 }
 
@@ -353,29 +462,84 @@ func checkRecipient(w lockedWallet) error {
 	return nil
 }
 
-// buildP2PJournal matches PRD §7.3 for a transfer with fee 0:
-// Debit sender amount / Credit recipient amount.
-// Day 17 adds the fee_revenue credit when fee_minor > 0. That line is a
-// posting, not a locked row: hot system accounts stay unlocked (ADR 0003,
-// PRD §8.2).
-func buildP2PJournal(fromAccount, toAccount uuid.UUID, amount, fee int64, currency, ref string) (ledger.Journal, error) {
-	_ = ref
-	if fee != 0 {
-		return ledger.Journal{}, httpx.Internal("Transfer fees are not enabled yet.")
+// buildP2PJournal matches PRD §7.3:
+//
+//	fee 0: Debit sender amount / Credit recipient amount
+//	fee n: Debit sender amount+n / Credit recipient amount / Credit fee_revenue n
+//
+// The fee_revenue line is a posting, not a locked row (ADR 0003, PRD §8.2).
+func buildP2PJournal(fromAccount, toAccount, feeAccount uuid.UUID, amount, feeMinor int64, currency string) (ledger.Journal, error) {
+	if feeMinor < 0 {
+		return ledger.Journal{}, httpx.Internal("Fee cannot be negative.")
 	}
-	money, err := ledger.NewMoney(amount, currency)
+	if feeMinor == 0 {
+		money, err := ledger.NewMoney(amount, currency)
+		if err != nil {
+			return ledger.Journal{}, httpx.ValidationFailed("Amount must be a positive amount within limits.")
+		}
+		debit, err := ledger.NewLine(fromAccount, ledger.Debit, money)
+		if err != nil {
+			return ledger.Journal{}, err
+		}
+		credit, err := ledger.NewLine(toAccount, ledger.Credit, money)
+		if err != nil {
+			return ledger.Journal{}, err
+		}
+		return ledger.NewJournal(ledger.KindP2P, []ledger.Line{debit, credit})
+	}
+
+	debitTotal, ok := addMinor(amount, feeMinor)
+	if !ok {
+		return ledger.Journal{}, httpx.ValidationFailed("Amount plus fee is out of range.")
+	}
+	debitMoney, err := ledger.NewMoney(debitTotal, currency)
+	if err != nil {
+		return ledger.Journal{}, httpx.ValidationFailed("Amount plus fee must be a positive amount within limits.")
+	}
+	recvMoney, err := ledger.NewMoney(amount, currency)
 	if err != nil {
 		return ledger.Journal{}, httpx.ValidationFailed("Amount must be a positive amount within limits.")
 	}
-	debit, err := ledger.NewLine(fromAccount, ledger.Debit, money)
+	feeMoney, err := ledger.NewMoney(feeMinor, currency)
+	if err != nil {
+		return ledger.Journal{}, httpx.ValidationFailed("Fee must be a positive amount within limits.")
+	}
+	if feeAccount == uuid.Nil {
+		return ledger.Journal{}, httpx.Internal("Fee revenue account is not configured.")
+	}
+
+	debit, err := ledger.NewLine(fromAccount, ledger.Debit, debitMoney)
 	if err != nil {
 		return ledger.Journal{}, err
 	}
-	credit, err := ledger.NewLine(toAccount, ledger.Credit, money)
+	creditRecv, err := ledger.NewLine(toAccount, ledger.Credit, recvMoney)
 	if err != nil {
 		return ledger.Journal{}, err
 	}
-	return ledger.NewJournal(ledger.KindP2P, []ledger.Line{debit, credit})
+	creditFee, err := ledger.NewLine(feeAccount, ledger.Credit, feeMoney)
+	if err != nil {
+		return ledger.Journal{}, err
+	}
+	return ledger.NewJournal(ledger.KindP2P, []ledger.Line{debit, creditRecv, creditFee})
+}
+
+func feeRevenueAccountID(ctx context.Context, tx pgx.Tx) (uuid.UUID, error) {
+	acct, err := ledgerdb.New(tx).GetAccountByCode(ctx, ledger.CodeFeeRevenue)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, httpx.Internal("Fee revenue account is not configured.")
+		}
+		return uuid.Nil, err
+	}
+	return acct.ID, nil
+}
+
+func addMinor(a, b int64) (int64, bool) {
+	sum := a + b
+	if (b > 0 && sum < a) || (b < 0 && sum > a) {
+		return 0, false
+	}
+	return sum, true
 }
 
 func allocateReference(ctx context.Context, q *transferdb.Queries) (string, error) {

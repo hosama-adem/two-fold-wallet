@@ -186,6 +186,71 @@ func TestTransferErrors(t *testing.T) {
 	})
 }
 
+func TestTransferPreviewAndFeeEnforcement(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	pool := testutil.Postgres(t)
+	sms := &auth.RecordingSMSSender{}
+	srv := newServer(t, pool, sms)
+	ctx := context.Background()
+
+	senderPhone := uniquePhone()
+	recipientPhone := uniquePhone()
+	registerVerifyPIN(t, srv, sms, senderPhone, "Abel Bekele")
+	registerVerifyPIN(t, srv, sms, recipientPhone, "Selam Bekele")
+	senderToken := login(t, srv, senderPhone)
+
+	senderAccount, _ := walletIDs(t, ctx, pool, senderPhone)
+	recipientAccount, _ := walletIDs(t, ctx, pool, recipientPhone)
+	fund(t, ctx, pool, senderAccount, 50_000)
+
+	const amount int64 = 20_000 // 200 ETB → 0.5% = 100 santim (above waive)
+	const wantFee int64 = 100
+
+	preview := postJSON(t, srv, "/v1/transfers/preview", senderToken, map[string]any{
+		"recipient": recipientPhone, "amount_minor": amount, "currency": "ETB",
+	})
+	if preview.Code != http.StatusOK {
+		t.Fatalf("preview status=%d body=%s", preview.Code, preview.Body.String())
+	}
+	var quote transfer.PreviewResult
+	if err := json.Unmarshal(preview.Body.Bytes(), &quote); err != nil {
+		t.Fatal(err)
+	}
+	if quote.AmountMinor != amount || quote.FeeMinor != wantFee || quote.TotalDebitMinor != amount+wantFee {
+		t.Fatalf("quote=%+v", quote)
+	}
+	if quote.Recipient.DisplayName == "" || quote.Recipient.PhoneMasked == "" {
+		t.Fatalf("recipient=%+v", quote.Recipient)
+	}
+
+	assertBalances(t, ctx, pool, senderAccount, 50_000, recipientAccount, 0)
+
+	stale := postTransfer(t, srv, senderToken, map[string]any{
+		"recipient": recipientPhone, "amount_minor": amount, "pin": testPIN, "expected_fee_minor": 0,
+	}, uuid.NewString())
+	assertProblem(t, stale, http.StatusConflict, transfer.CodeFeeChanged)
+	assertBalances(t, ctx, pool, senderAccount, 50_000, recipientAccount, 0)
+
+	ok := postTransfer(t, srv, senderToken, map[string]any{
+		"recipient": recipientPhone, "amount_minor": amount, "pin": testPIN,
+		"expected_fee_minor": wantFee, "note": "lunch",
+	}, uuid.NewString())
+	if ok.Code != http.StatusCreated {
+		t.Fatalf("transfer status=%d body=%s", ok.Code, ok.Body.String())
+	}
+	var out transfer.Result
+	if err := json.Unmarshal(ok.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Transaction.FeeMinor != wantFee || out.Transaction.AmountMinor != amount {
+		t.Fatalf("transaction=%+v", out.Transaction)
+	}
+	assertBalances(t, ctx, pool, senderAccount, 50_000-amount-wantFee, recipientAccount, amount)
+	assertJournalMatchesPRDWithFee(t, ctx, pool, out.Transaction.ID, senderAccount, recipientAccount, amount, wantFee)
+}
+
 func TestTransferIdempotentReplay(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration")
@@ -274,6 +339,54 @@ func assertJournalMatchesPRD(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	}
 	if credit.AccountID != toAccount || credit.AmountMinor != amount {
 		t.Fatalf("credit=%+v want account=%s amount=%d", credit, toAccount, amount)
+	}
+}
+
+func assertJournalMatchesPRDWithFee(t *testing.T, ctx context.Context, pool *pgxpool.Pool, txID, fromAccount, toAccount uuid.UUID, amount, fee int64) {
+	t.Helper()
+	var journalID uuid.UUID
+	err := pool.QueryRow(ctx, `
+		SELECT id FROM journal_entries WHERE transaction_id = $1 AND kind = 'p2p'
+	`, txID).Scan(&journalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	postings, err := ledgerdb.New(pool).ListPostingsByJournalID(ctx, journalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(postings) != 3 {
+		t.Fatalf("want 3 postings (with fee), got %d", len(postings))
+	}
+	feeAcct, err := ledgerdb.New(pool).GetAccountByCode(ctx, ledger.CodeFeeRevenue)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var debit, creditRecv, creditFee *ledgerdb.Posting
+	for i := range postings {
+		p := &postings[i]
+		switch {
+		case p.Direction == "debit":
+			debit = p
+		case p.Direction == "credit" && p.AccountID == toAccount:
+			creditRecv = p
+		case p.Direction == "credit" && p.AccountID == feeAcct.ID:
+			creditFee = p
+		}
+	}
+	if debit == nil || creditRecv == nil || creditFee == nil {
+		t.Fatalf("postings=%+v", postings)
+	}
+	// PRD §7.3 P2P with fee: Dr amount+fee / Cr amount / Cr fee_revenue fee.
+	if debit.AccountID != fromAccount || debit.AmountMinor != amount+fee {
+		t.Fatalf("debit=%+v want account=%s amount=%d", debit, fromAccount, amount+fee)
+	}
+	if creditRecv.AmountMinor != amount {
+		t.Fatalf("credit recv=%+v want %d", creditRecv, amount)
+	}
+	if creditFee.AmountMinor != fee {
+		t.Fatalf("credit fee=%+v want %d", creditFee, fee)
 	}
 }
 

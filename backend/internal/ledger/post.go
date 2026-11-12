@@ -27,6 +27,9 @@ type accountState struct {
 	version       int64
 	loadedVersion int64
 	allowNegative bool
+	// skipPersist is set for hot system accounts (ADR 0003). Their postings
+	// are the books; the cached balance may lag until the drift job runs.
+	skipPersist bool
 }
 
 // movement is one journal Post or Reverse is about to commit.
@@ -139,18 +142,43 @@ func writeMovement(ctx context.Context, tx pgx.Tx, m movement) (uuid.UUID, error
 	return journalID, nil
 }
 
-// lockAccounts takes FOR UPDATE in sorted id order. Two journals that share
-// accounts then cannot each hold one row and wait for the other.
+// lockAccounts takes FOR UPDATE in sorted id order for user wallets. Two
+// journals that share wallets then cannot each hold one row and wait for the
+// other.
 //
-// Every account present in the journal is locked, so balance_after_minor is
-// read from the row this transaction holds. Peer transfers keep hot system
-// accounts out of that set on purpose (ADR 0003): locking fee_revenue or a
-// provider clearing row would make every transfer wait on one row. Their
-// postings stay the source of truth; the drift job owns that cache.
+// Hot system accounts (ownerless + allow_negative) are read without a lock
+// and their cache is not updated here (ADR 0003). Locking fee_revenue or a
+// provider clearing row would make every transfer wait on one row. Postings
+// stay the source of truth; the drift job owns that cache.
 func lockAccounts(ctx context.Context, q *ledgerdb.Queries, lines []Line) (map[uuid.UUID]*accountState, error) {
 	ids := accountIDs(lines)
 	states := make(map[uuid.UUID]*accountState, len(ids))
+	lockIDs := make([]uuid.UUID, 0, len(ids))
+
 	for _, id := range ids {
+		acct, err := q.GetAccountByID(ctx, id)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, fmt.Errorf("ledger: account %s not found", id)
+			}
+			return nil, fmt.Errorf("ledger: load account: %w", err)
+		}
+		if isHotSystemAccount(acct) {
+			states[id] = &accountState{
+				currency:      acct.Currency,
+				normal:        Side(acct.NormalBalance),
+				balanceMinor:  acct.BalanceMinor,
+				version:       acct.Version,
+				loadedVersion: acct.Version,
+				allowNegative: acct.AllowNegative,
+				skipPersist:   true,
+			}
+			continue
+		}
+		lockIDs = append(lockIDs, id)
+	}
+
+	for _, id := range lockIDs {
 		acct, err := q.GetAccountForUpdate(ctx, id)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -168,6 +196,12 @@ func lockAccounts(ctx context.Context, q *ledgerdb.Queries, lines []Line) (map[u
 		}
 	}
 	return states, nil
+}
+
+// isHotSystemAccount reports the five platform buckets that must not serialize
+// the send path. They are ownerless and allow_negative (migration 00009).
+func isHotSystemAccount(acct ledgerdb.Account) bool {
+	return acct.OwnerUserID == nil && acct.AllowNegative
 }
 
 // applyLines walks the journal in caller order. balance_after_minor is the
@@ -212,7 +246,10 @@ func applyLines(states map[uuid.UUID]*accountState, lines []Line) ([]postingDraf
 
 func persistBalances(ctx context.Context, q *ledgerdb.Queries, states map[uuid.UUID]*accountState) error {
 	ids := make([]uuid.UUID, 0, len(states))
-	for id := range states {
+	for id, state := range states {
+		if state.skipPersist {
+			continue
+		}
 		ids = append(ids, id)
 	}
 	slices.SortFunc(ids, func(a, b uuid.UUID) int {
