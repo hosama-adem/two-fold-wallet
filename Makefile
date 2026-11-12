@@ -1,4 +1,4 @@
-.PHONY: up down logs run build test vet lint tidy health ready migrate-up migrate-down migrate-new generate seed
+.PHONY: up down logs run build test test-concurrency vet lint tidy health ready migrate-up migrate-down migrate-new generate seed
 
 ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 BACKEND := $(ROOT)/backend
@@ -29,6 +29,9 @@ build: ## Compile the API
 
 test: ## Run unit + integration tests
 	cd $(BACKEND) && go test -p 1 ./...
+
+test-concurrency: ## 1,000 parallel transfers, 20×, with the race detector
+	cd $(BACKEND) && go test -race -count=20 -timeout 40m -p 1 ./internal/transfer/ -run '^TestConcurrency'
 
 vet: ## Static checks
 	cd $(BACKEND) && go vet ./...

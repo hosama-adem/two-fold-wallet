@@ -32,6 +32,11 @@ type Options struct {
 	Auth      *auth.Handler
 	Wallets   *wallet.Handler
 	Transfers *transfer.Handler
+	// RequestTimeout overrides the per-request deadline. Zero keeps the
+	// standard 10s timeout. The concurrency suite raises it: a thousand
+	// transfers on one pair queue on the row lock, and that wait is the proof,
+	// not a client deadline.
+	RequestTimeout time.Duration
 }
 
 // New builds an HTTP server with health routes and the standard middleware stack.
@@ -43,8 +48,12 @@ func New(cfg config.Config, pool *pgxpool.Pool, log *slog.Logger, opts Options) 
 	engine := gin.New()
 	// Do not trust X-Forwarded-For / X-Real-IP unless proxies are configured later.
 	_ = engine.SetTrustedProxies(nil)
-	for _, mw := range httpx.Standard(httpx.WithLogger(log)) {
-		engine.Use(mw)
+	mw := []httpx.MiddlewareOption{httpx.WithLogger(log)}
+	if opts.RequestTimeout > 0 {
+		mw = append(mw, httpx.WithTimeout(opts.RequestTimeout))
+	}
+	for _, h := range httpx.Standard(mw...) {
+		engine.Use(h)
 	}
 
 	s := &Server{

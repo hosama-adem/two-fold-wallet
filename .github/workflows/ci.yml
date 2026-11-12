@@ -8,7 +8,7 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
 
     services:
       postgres:
@@ -64,8 +64,14 @@ jobs:
 
       - name: Test
         working-directory: backend
-        # -p 1: one shared Postgres service — avoid migrate/user package races
-        run: go test -p 1 ./...
+        # -p 1: one shared Postgres service — avoid migrate/user package races.
+        # The 1,000-transfer suite runs in its own step, 20× with -race.
+        run: go test -p 1 ./... -skip '^TestConcurrency'
+
+      - name: Concurrency suite ×20 (race)
+        working-directory: backend
+        timeout-minutes: 45
+        run: go test -race -count=20 -timeout 40m -p 1 ./internal/transfer/ -run '^TestConcurrency'
 
       - name: Ledger properties ×1000
         working-directory: backend
