@@ -15,7 +15,7 @@ import (
 // CurrentUser reads the authenticated user id set by access-token middleware.
 type CurrentUser func(c *gin.Context) (uuid.UUID, bool)
 
-// Handler serves POST /v1/transfers.
+// Handler serves POST /v1/transfers and POST /v1/transfers/preview.
 type Handler struct {
 	svc         *Service
 	pins        *pin.Service
@@ -26,7 +26,7 @@ type Handler struct {
 
 // NewHandler builds the transfer HTTP adapter.
 // require is access-token middleware. idempotent is Idempotency-Key middleware
-// (mounted after auth). currentUser reads the id auth stored.
+// (mounted after auth on the money path only). currentUser reads the id auth stored.
 func NewHandler(
 	svc *Service,
 	pins *pin.Service,
@@ -53,9 +53,49 @@ type createBody struct {
 	ExpectedFeeMinor int64  `json:"expected_fee_minor"`
 }
 
-// Mount registers POST /v1/transfers behind auth + idempotency.
+// previewBody is the POST /v1/transfers/preview JSON body.
+type previewBody struct {
+	Recipient   string `json:"recipient"`
+	AmountMinor int64  `json:"amount_minor"`
+	Currency    string `json:"currency"`
+}
+
+// Mount registers transfer routes behind auth. Preview has no PIN and no
+// Idempotency-Key. Confirm keeps both.
 func (h *Handler) Mount(e *gin.Engine) {
+	e.POST("/v1/transfers/preview", h.require, h.Preview)
 	e.POST("/v1/transfers", h.require, h.idempotent, h.Create)
+}
+
+// Preview handles POST /v1/transfers/preview.
+func (h *Handler) Preview(c *gin.Context) {
+	userID, ok := h.caller(c)
+	if !ok {
+		return
+	}
+
+	var body previewBody
+	if err := httpx.BindJSON(c, &body); err != nil {
+		httpx.WriteError(c, err)
+		return
+	}
+	body.Recipient = strings.TrimSpace(body.Recipient)
+	body.Currency = strings.TrimSpace(body.Currency)
+	if body.Currency == "" {
+		body.Currency = wallet.CurrencyETB
+	}
+
+	out, err := h.svc.Preview(c.Request.Context(), PreviewRequest{
+		SenderUserID:   userID,
+		RecipientQuery: body.Recipient,
+		AmountMinor:    body.AmountMinor,
+		Currency:       body.Currency,
+	})
+	if err != nil {
+		httpx.WriteError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 // Create handles POST /v1/transfers.
