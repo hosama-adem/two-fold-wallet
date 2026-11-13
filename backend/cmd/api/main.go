@@ -10,6 +10,8 @@ import (
 	"github.com/hosama-adem/twofold/backend/internal/audit"
 	"github.com/hosama-adem/twofold/backend/internal/auth"
 	"github.com/hosama-adem/twofold/backend/internal/idempotency"
+	"github.com/hosama-adem/twofold/backend/internal/kyc"
+	"github.com/hosama-adem/twofold/backend/internal/limit"
 	"github.com/hosama-adem/twofold/backend/internal/pin"
 	"github.com/hosama-adem/twofold/backend/internal/platform/config"
 	"github.com/hosama-adem/twofold/backend/internal/platform/database"
@@ -65,6 +67,7 @@ func run() int {
 		Window: cfg.AuthRateLimitWindow,
 	})
 
+	limits := limit.NewService(pool)
 	authSvc := auth.NewService(auth.ServiceDeps{
 		Users:      users,
 		Sessions:   sessions,
@@ -73,6 +76,7 @@ func run() int {
 		Pins:       pins,
 		Pool:       pool,
 		Wallets:    wallets,
+		Limits:     limits,
 		SMS:        auth.LogSMSSender{Log: log},
 		Log:        log,
 		RefreshTTL: cfg.RefreshTokenTTL,
@@ -87,11 +91,17 @@ func run() int {
 		idempotency.Middleware(idemStore, auth.UserIDFromContext),
 		auth.UserIDFromContext,
 	)
+	kycHandler := kyc.NewHandler(
+		kyc.NewService(pool),
+		authHandler.RequireAccess(),
+		auth.UserIDFromContext,
+	)
 
 	srv := httpserver.New(cfg, pool, log, httpserver.Options{
 		Auth:      authHandler,
 		Wallets:   walletHandler,
 		Transfers: transferHandler,
+		KYC:       kycHandler,
 	})
 	if err := srv.Run(ctx); err != nil {
 		log.Error("server", "error", err)

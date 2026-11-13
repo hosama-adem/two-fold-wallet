@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/hosama-adem/twofold/backend/internal/audit"
+	"github.com/hosama-adem/twofold/backend/internal/limit"
 	"github.com/hosama-adem/twofold/backend/internal/pin"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpx"
 	"github.com/hosama-adem/twofold/backend/internal/session"
@@ -42,6 +43,11 @@ type WalletProvisioner interface {
 	OpenETB(ctx context.Context, tx pgx.Tx, userID uuid.UUID) (wallet.Opened, error)
 }
 
+// LimitUsage loads KYC tier caps and rolling usage for GET /v1/me.
+type LimitUsage interface {
+	ForUser(ctx context.Context, userID uuid.UUID) (limit.Usage, error)
+}
+
 type systemClock struct{}
 
 func (systemClock) Now() time.Time { return time.Now().UTC() }
@@ -55,6 +61,7 @@ type Service struct {
 	pins       *pin.Service
 	pool       *pgxpool.Pool
 	wallets    WalletProvisioner
+	limits     LimitUsage
 	sms        SMSSender
 	log        *slog.Logger
 	clock      Clock
@@ -70,6 +77,7 @@ type ServiceDeps struct {
 	Pins       *pin.Service // optional; built automatically when nil
 	Pool       *pgxpool.Pool
 	Wallets    WalletProvisioner
+	Limits     LimitUsage
 	SMS        SMSSender
 	Log        *slog.Logger
 	RefreshTTL time.Duration
@@ -102,6 +110,10 @@ func NewService(deps ServiceDeps) *Service {
 	if wallets == nil && deps.Pool != nil {
 		wallets = wallet.NewService(deps.Pool)
 	}
+	limits := deps.Limits
+	if limits == nil && deps.Pool != nil {
+		limits = limit.NewService(deps.Pool)
+	}
 	return &Service{
 		users:      deps.Users,
 		sessions:   deps.Sessions,
@@ -110,6 +122,7 @@ func NewService(deps ServiceDeps) *Service {
 		pins:       pins,
 		pool:       deps.Pool,
 		wallets:    wallets,
+		limits:     limits,
 		sms:        sms,
 		log:        log,
 		clock:      systemClock{},

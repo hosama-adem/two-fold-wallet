@@ -71,6 +71,19 @@ type JournalEntry struct {
 	CreatedAt         time.Time  `json:"created_at"`
 }
 
+type KycSubmission struct {
+	ID           uuid.UUID       `json:"id"`
+	UserID       uuid.UUID       `json:"user_id"`
+	TargetTier   int16           `json:"target_tier"`
+	Data         json.RawMessage `json:"data"`
+	DocumentKeys []string        `json:"document_keys"`
+	Status       string          `json:"status"`
+	ReviewedBy   *uuid.UUID      `json:"reviewed_by"`
+	ReviewedAt   *time.Time      `json:"reviewed_at"`
+	Reason       *string         `json:"reason"`
+	CreatedAt    time.Time       `json:"created_at"`
+}
+
 type OtpCode struct {
 	ID         uuid.UUID  `json:"id"`
 	PhoneE164  string     `json:"phone_e164"`
@@ -105,6 +118,15 @@ type Session struct {
 	RevokedAt   *time.Time `json:"revoked_at"`
 	ReplacedBy  *uuid.UUID `json:"replaced_by"`
 	CreatedAt   time.Time  `json:"created_at"`
+}
+
+type TierLimit struct {
+	Tier            int16 `json:"tier"`
+	MaxBalanceMinor int64 `json:"max_balance_minor"`
+	PerTxnMinor     int64 `json:"per_txn_minor"`
+	DailyMinor      int64 `json:"daily_minor"`
+	MonthlyMinor    int64 `json:"monthly_minor"`
+	CanWithdraw     bool  `json:"can_withdraw"`
 }
 
 type Transaction struct {

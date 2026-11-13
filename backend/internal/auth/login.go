@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hosama-adem/twofold/backend/internal/audit"
+	"github.com/hosama-adem/twofold/backend/internal/limit"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpx"
 	"github.com/hosama-adem/twofold/backend/internal/session"
 	"github.com/hosama-adem/twofold/backend/internal/user"
@@ -196,18 +197,19 @@ func (s *Service) Logout(ctx context.Context, in LogoutInput, meta LoginMeta) er
 
 // MeProfile is the authenticated profile payload.
 type MeProfile struct {
-	ID              uuid.UUID  `json:"id"`
-	Phone           string     `json:"phone"`
-	Handle          *string    `json:"handle"`
-	DisplayName     string     `json:"display_name"`
-	KYCTier         int16      `json:"kyc_tier"`
-	Status          string     `json:"status"`
-	PhoneVerifiedAt *time.Time `json:"phone_verified_at"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	ID              uuid.UUID    `json:"id"`
+	Phone           string       `json:"phone"`
+	Handle          *string      `json:"handle"`
+	DisplayName     string       `json:"display_name"`
+	KYCTier         int16        `json:"kyc_tier"`
+	Status          string       `json:"status"`
+	PhoneVerifiedAt *time.Time   `json:"phone_verified_at"`
+	CreatedAt       time.Time    `json:"created_at"`
+	UpdatedAt       time.Time    `json:"updated_at"`
+	Limits          *limit.Usage `json:"limits,omitempty"`
 }
 
-// Me returns the profile for the authenticated user.
+// Me returns the profile for the authenticated user, including limit usage.
 func (s *Service) Me(ctx context.Context, userID uuid.UUID) (MeProfile, error) {
 	u, err := s.users.GetByID(ctx, userID)
 	if err != nil {
@@ -216,7 +218,7 @@ func (s *Service) Me(ctx context.Context, userID uuid.UUID) (MeProfile, error) {
 		}
 		return MeProfile{}, err
 	}
-	return MeProfile{
+	out := MeProfile{
 		ID:              u.ID,
 		Phone:           u.PhoneE164,
 		Handle:          u.Handle,
@@ -226,7 +228,15 @@ func (s *Service) Me(ctx context.Context, userID uuid.UUID) (MeProfile, error) {
 		PhoneVerifiedAt: u.PhoneVerifiedAt,
 		CreatedAt:       u.CreatedAt,
 		UpdatedAt:       u.UpdatedAt,
-	}, nil
+	}
+	if s.limits != nil {
+		usage, err := s.limits.ForUser(ctx, userID)
+		if err != nil {
+			return MeProfile{}, err
+		}
+		out.Limits = &usage
+	}
+	return out, nil
 }
 
 func (s *Service) issueSession(ctx context.Context, userID, familyID uuid.UUID, meta LoginMeta) (TokenResponse, uuid.UUID, error) {
