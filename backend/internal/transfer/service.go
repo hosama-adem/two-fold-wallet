@@ -18,6 +18,7 @@ import (
 	"github.com/hosama-adem/twofold/backend/internal/fee"
 	"github.com/hosama-adem/twofold/backend/internal/ledger"
 	"github.com/hosama-adem/twofold/backend/internal/ledger/ledgerdb"
+	"github.com/hosama-adem/twofold/backend/internal/limit"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpx"
 	"github.com/hosama-adem/twofold/backend/internal/transfer/transferdb"
 	"github.com/hosama-adem/twofold/backend/internal/wallet"
@@ -168,11 +169,13 @@ func (s *Service) Preview(ctx context.Context, in PreviewRequest) (PreviewResult
 // Inside one database transaction:
 //  1. Resolve the recipient (phone or @handle).
 //  2. Lock both wallets (and their accounts) in sorted wallet-id order.
-//  3. Check freeze, self-send, and available balance (amount + fee).
+//  3. Check freeze, self-send, available balance, and KYC tier limits.
 //  4. Insert transactions as pending, post the p2p journal, mark completed.
 //
 // The fee is computed from fee_rules. expected_fee_minor must match or the
 // call returns 409 fee_changed and moves nothing (FR-TRF-3, PRD §7.3).
+// limit.Check / CheckReceive run after locks and before the journal so races
+// cannot slip past a daily or max-balance cap (PRD §12.1).
 func (s *Service) Transfer(ctx context.Context, in Request) (Result, error) {
 	if s.pool == nil {
 		return Result{}, httpx.Internal("Transfer store is not configured.")
@@ -243,6 +246,13 @@ func (s *Service) Transfer(ctx context.Context, in Request) (Result, error) {
 	debitTotal := in.AmountMinor + feeMinor
 	if from.AvailableMinor < debitTotal {
 		return Result{}, errInsufficientFunds(from.AvailableMinor, debitTotal, in.Currency)
+	}
+
+	if err := limit.Check(ctx, tx, in.SenderUserID, kindP2P, in.AmountMinor); err != nil {
+		return Result{}, err
+	}
+	if err := limit.CheckReceive(ctx, tx, to.UserID, to.LedgerBalanceMinor, in.AmountMinor); err != nil {
+		return Result{}, err
 	}
 
 	txID, err := uuid.NewV7()

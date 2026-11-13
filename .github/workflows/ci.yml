@@ -45,9 +45,10 @@ jobs:
         working-directory: backend
         run: |
           sqlc generate
-          if ! git diff --quiet -- internal/user/userdb internal/session/sessiondb internal/audit/auditdb internal/ledger/ledgerdb internal/wallet/walletdb; then
-            echo "sqlc output is stale — run sqlc generate and commit userdb/sessiondb/auditdb/ledgerdb/walletdb"
-            git diff -- internal/user/userdb internal/session/sessiondb internal/audit/auditdb internal/ledger/ledgerdb internal/wallet/walletdb
+          pkgs="internal/user/userdb internal/session/sessiondb internal/audit/auditdb internal/ledger/ledgerdb internal/wallet/walletdb internal/idempotency/idempotencydb internal/transfer/transferdb internal/fee/feedb internal/limit/limitdb internal/kyc/kycdb"
+          if ! git diff --quiet -- $pkgs; then
+            echo "sqlc output is stale — run sqlc generate and commit generated packages"
+            git diff -- $pkgs
             exit 1
           fi
 

@@ -41,6 +41,8 @@ func WriteError(c *gin.Context, err error) {
 	p := newProblem(he.Status, he.Code, he.Title, detail, reqID)
 	p.TriesRemaining = he.TriesRemaining
 	p.LockedUntil = he.LockedUntil
+	p.Limit = he.Limit
+	p.RemainingMinor = he.RemainingMinor
 	WriteProblem(c, p)
 }
 

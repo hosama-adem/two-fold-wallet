@@ -20,6 +20,8 @@ type Problem struct {
 	RequestID      string     `json:"request_id,omitempty"`
 	TriesRemaining *int       `json:"tries_remaining,omitempty"`
 	LockedUntil    *time.Time `json:"locked_until,omitempty"`
+	Limit          *string    `json:"limit,omitempty"`
+	RemainingMinor *int64     `json:"remaining_minor,omitempty"`
 }
 
 func problemType(code string) string {

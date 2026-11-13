@@ -24,8 +24,10 @@ import (
 	"github.com/hosama-adem/twofold/backend/internal/audit"
 	"github.com/hosama-adem/twofold/backend/internal/auth"
 	"github.com/hosama-adem/twofold/backend/internal/idempotency"
+	"github.com/hosama-adem/twofold/backend/internal/kyc"
 	"github.com/hosama-adem/twofold/backend/internal/ledger"
 	"github.com/hosama-adem/twofold/backend/internal/ledger/ledgerdb"
+	"github.com/hosama-adem/twofold/backend/internal/limit"
 	"github.com/hosama-adem/twofold/backend/internal/pin"
 	"github.com/hosama-adem/twofold/backend/internal/platform/config"
 	"github.com/hosama-adem/twofold/backend/internal/platform/database/testutil"
@@ -437,6 +439,7 @@ func newServer(t *testing.T, pool *pgxpool.Pool, sms *auth.RecordingSMSSender) *
 		Match: auth.VerifyPIN,
 		Log:   log,
 	})
+	limits := limit.NewService(pool)
 	svc := auth.NewService(auth.ServiceDeps{
 		Users:      users,
 		Sessions:   sessions,
@@ -445,6 +448,7 @@ func newServer(t *testing.T, pool *pgxpool.Pool, sms *auth.RecordingSMSSender) *
 		Pins:       pins,
 		Pool:       pool,
 		Wallets:    wallets,
+		Limits:     limits,
 		SMS:        sms,
 		Log:        log,
 		RefreshTTL: 30 * 24 * time.Hour,
@@ -462,10 +466,16 @@ func newServer(t *testing.T, pool *pgxpool.Pool, sms *auth.RecordingSMSSender) *
 		idempotency.Middleware(idemStore, auth.UserIDFromContext),
 		auth.UserIDFromContext,
 	)
+	kycHandler := kyc.NewHandler(
+		kyc.NewService(pool),
+		authHandler.RequireAccess(),
+		auth.UserIDFromContext,
+	)
 	return httpserver.New(config.Config{AppEnv: "test", HTTPAddr: ":0"}, pool, log, httpserver.Options{
 		Auth:      authHandler,
 		Wallets:   walletHandler,
 		Transfers: transferHandler,
+		KYC:       kycHandler,
 	})
 }
 

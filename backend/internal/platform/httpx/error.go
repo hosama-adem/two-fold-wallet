@@ -28,6 +28,8 @@ type Error struct {
 	// RFC 9457 extension members (copied onto Problem when present).
 	TriesRemaining *int
 	LockedUntil    *time.Time
+	Limit          *string
+	RemainingMinor *int64
 	wrapped        error
 }
 
@@ -64,6 +66,16 @@ func (e *Error) WithLockedUntil(t time.Time) *Error {
 	}
 	utc := t.UTC()
 	e.LockedUntil = &utc
+	return e
+}
+
+// WithLimit attaches which KYC tier limit fired and how much room remains.
+func (e *Error) WithLimit(name string, remainingMinor int64) *Error {
+	if e == nil {
+		return nil
+	}
+	e.Limit = &name
+	e.RemainingMinor = &remainingMinor
 	return e
 }
 
