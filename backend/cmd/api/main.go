@@ -9,6 +9,7 @@ import (
 
 	"github.com/hosama-adem/twofold/backend/internal/audit"
 	"github.com/hosama-adem/twofold/backend/internal/auth"
+	"github.com/hosama-adem/twofold/backend/internal/history"
 	"github.com/hosama-adem/twofold/backend/internal/idempotency"
 	"github.com/hosama-adem/twofold/backend/internal/kyc"
 	"github.com/hosama-adem/twofold/backend/internal/limit"
@@ -96,12 +97,18 @@ func run() int {
 		authHandler.RequireAccess(),
 		auth.UserIDFromContext,
 	)
+	historyHandler := history.NewHandler(
+		history.NewService(pool),
+		authHandler.RequireAccess(),
+		auth.UserIDFromContext,
+	)
 
 	srv := httpserver.New(cfg, pool, log, httpserver.Options{
 		Auth:      authHandler,
 		Wallets:   walletHandler,
 		Transfers: transferHandler,
 		KYC:       kycHandler,
+		History:   historyHandler,
 	})
 	if err := srv.Run(ctx); err != nil {
 		log.Error("server", "error", err)

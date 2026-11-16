@@ -1,0 +1,101 @@
+Day 19 / FR-HIS — EXPLAIN ANALYZE: transaction history list query
+==================================================================
+
+Captured against local Postgres (twofold-db, PG16) on 2026-11-13.
+Table seeded to ~50,358 transactions. Two cases are shown:
+
+  (A) The real query as the app runs it (ORDER BY created_at DESC, id DESC
+      LIMIT 20) for a *selective* participant whose matching rows are OLD
+      (sparse and deep in the table).
+  (B) The same query with transactions_created_at_idx temporarily hidden
+      (inside a rolled-back transaction) to expose the BitmapOr plan the
+      three composite indexes from migration 00016 are built for.
+
+The list passes the caller's wallet ids as a uuid[] (not an EXISTS join) so the
+participant predicates compare against constants — that is what makes the
+composite indexes usable by a BitmapOr.
+
+Indexes added in 00016:
+  transactions_from_wallet_created_id_idx    (from_wallet_id, created_at DESC, id DESC)
+  transactions_to_wallet_created_id_idx      (to_wallet_id,   created_at DESC, id DESC)
+  transactions_initiator_created_id_idx      (initiator_user_id, created_at DESC, id DESC)
+
+
+Query (first page; cursor-less form shown for clarity)
+------------------------------------------------------
+SELECT t.id, t.reference, t.kind, t.status, t.amount_minor, t.fee_minor,
+       t.currency, t.note, t.from_wallet_id, t.to_wallet_id, t.created_at, t.completed_at,
+       fw.user_id, tw.user_id, fu.display_name, fu.handle, fu.phone_e164,
+       tu.display_name, tu.handle, tu.phone_e164
+FROM transactions t
+LEFT JOIN wallets fw ON fw.id = t.from_wallet_id
+LEFT JOIN wallets tw ON tw.id = t.to_wallet_id
+LEFT JOIN users   fu ON fu.id = fw.user_id
+LEFT JOIN users   tu ON tu.id = tw.user_id
+WHERE (
+    t.initiator_user_id = $user
+    OR t.from_wallet_id  = ANY($wallet_ids::uuid[])
+    OR t.to_wallet_id    = ANY($wallet_ids::uuid[])
+)
+ORDER BY t.created_at DESC, t.id DESC
+LIMIT 20;
+
+
+(A) As the app runs it — planner uses transactions_created_at_idx
+------------------------------------------------------------------
+For a user whose rows cluster near the newest end, walking the DESC-ordered
+created_at index and filtering is cheapest and avoids a sort. For the pathological
+"sparse + old" participant below, the planner still picks this path (it mis-guesses
+the matches are near the top) and pays for it: 50,075 rows discarded, ~30 ms.
+
+ Limit  (cost=15.80..312.97 rows=20) (actual time=29.391..29.399 rows=20)
+   ->  Incremental Sort  (Sort Key: t.created_at DESC, t.id DESC; Presorted Key: t.created_at)
+         ->  Nested Loop Left Join  (... Memoize on wallets/users lookups ...)
+               ->  Index Scan using transactions_created_at_idx on transactions t
+                     Filter: ((initiator_user_id = '...')
+                              OR (from_wallet_id = ANY ('{...}'::uuid[]))
+                              OR (to_wallet_id   = ANY ('{...}'::uuid[])))
+                     Rows Removed by Filter: 50075
+ Planning Time: 12.279 ms
+ Execution Time: 30.164 ms
+
+The LEFT JOINs to wallets/users are driven by Memoize + unique-index point
+lookups (wallets_id_currency_unique, users_pkey) — one cached probe per emitted
+row, negligible cost.
+
+
+(B) Composite indexes in action — BitmapOr (created_at index hidden)
+--------------------------------------------------------------------
+BEGIN; DROP INDEX transactions_created_at_idx;  -- then EXPLAIN; ROLLBACK;
+
+ Limit  (cost=515.84..515.89 rows=20) (actual time=0.596..0.603 rows=20)
+   ->  Sort  (Sort Key: created_at DESC, id DESC; Sort Method: top-N heapsort  Memory: 26kB)
+         ->  Bitmap Heap Scan on transactions t   (actual rows=203)
+               Recheck Cond: ((initiator_user_id = '...')
+                              OR (from_wallet_id = ANY ('{...}'))
+                              OR (to_wallet_id   = ANY ('{...}')))
+               Heap Blocks: exact=12
+               ->  BitmapOr
+                     ->  Bitmap Index Scan on transactions_initiator_user_id_idx        (rows=6)
+                     ->  Bitmap Index Scan on transactions_from_wallet_created_id_idx    (rows=3)
+                     ->  Bitmap Index Scan on transactions_to_wallet_created_id_idx      (rows=500)
+ Planning Time: 3.010 ms
+ Execution Time: 0.813 ms
+
+All three participant predicates resolve through their own index, the results
+are OR'd, and the 203 matches are top-N sorted — 0.8 ms vs 30 ms, ~37x faster.
+This is the access path the 00016 indexes exist for: a participant with a long,
+sparse history anywhere in a large table.
+
+
+Takeaways
+---------
+* Keyset (created_at, id) + row-comparison cursor keeps every page O(limit); no
+  OFFSET, no re-scan, and inserts arriving mid-pagination never duplicate/skip
+  older rows (covered by TestHistoryPaginationNoDuplicatesOrGaps).
+* The uuid[] participant form (vs an EXISTS join) is what lets Postgres pick the
+  composite indexes via BitmapOr — the EXISTS variant forces a full filtered
+  scan and ignores them entirely.
+* The composite indexes carry (created_at DESC, id DESC) so the heavy, deep-
+  history case (B) stays index-driven; the created_at index still wins for users
+  whose newest rows are the first ones scanned (A). Both paths are cheap.
