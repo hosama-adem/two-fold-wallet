@@ -235,6 +235,16 @@ CREATE INDEX transactions_initiator_user_id_idx ON transactions (initiator_user_
 CREATE INDEX transactions_status_idx ON transactions (status);
 CREATE INDEX transactions_created_at_idx ON transactions (created_at DESC);
 
+-- History keyset list (FR-HIS-1, migration 00016). One index per participant
+-- predicate, each carrying the newest-first sort so an OR of the three can
+-- BitmapOr without OFFSET.
+CREATE INDEX transactions_from_wallet_created_id_idx
+    ON transactions (from_wallet_id, created_at DESC, id DESC);
+CREATE INDEX transactions_to_wallet_created_id_idx
+    ON transactions (to_wallet_id, created_at DESC, id DESC);
+CREATE INDEX transactions_initiator_created_id_idx
+    ON transactions (initiator_user_id, created_at DESC, id DESC);
+
 CREATE TABLE transaction_events (
     id               UUID PRIMARY KEY,
     transaction_id   UUID NOT NULL REFERENCES transactions (id),

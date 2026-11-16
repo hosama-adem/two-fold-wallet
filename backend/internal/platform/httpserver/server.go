@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/hosama-adem/twofold/backend/internal/auth"
+	"github.com/hosama-adem/twofold/backend/internal/history"
 	"github.com/hosama-adem/twofold/backend/internal/kyc"
 	"github.com/hosama-adem/twofold/backend/internal/platform/config"
 	"github.com/hosama-adem/twofold/backend/internal/platform/database"
@@ -34,6 +35,7 @@ type Options struct {
 	Wallets   *wallet.Handler
 	Transfers *transfer.Handler
 	KYC       *kyc.Handler
+	History   *history.Handler
 	// RequestTimeout overrides the per-request deadline. Zero keeps the
 	// standard 10s timeout. The concurrency suite raises it: a thousand
 	// transfers on one pair queue on the row lock, and that wait is the proof,
@@ -97,6 +99,9 @@ func (s *Server) routes(opts Options) {
 	}
 	if opts.KYC != nil {
 		opts.KYC.Mount(s.engine)
+	}
+	if opts.History != nil {
+		opts.History.Mount(s.engine)
 	}
 	s.engine.NoRoute(s.handleNotFound)
 }
