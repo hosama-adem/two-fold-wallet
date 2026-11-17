@@ -262,6 +262,38 @@ func (q *Queries) LookupRecipientByHandle(ctx context.Context, handle *string) (
 	return i, err
 }
 
+const lookupRecipientByID = `-- name: LookupRecipientByID :one
+SELECT u.id, u.display_name, u.handle, u.phone_e164
+FROM users u
+JOIN wallets w
+  ON w.user_id = u.id
+ AND w.currency = 'ETB'
+ AND w.status <> 'closed'
+WHERE u.status = 'active'
+  AND u.phone_verified_at IS NOT NULL
+  AND u.id = $1
+`
+
+type LookupRecipientByIDRow struct {
+	ID          uuid.UUID `json:"id"`
+	DisplayName string    `json:"display_name"`
+	Handle      *string   `json:"handle"`
+	PhoneE164   string    `json:"phone_e164"`
+}
+
+// Used when paying a money request: the recipient is already known by user id.
+func (q *Queries) LookupRecipientByID(ctx context.Context, id uuid.UUID) (LookupRecipientByIDRow, error) {
+	row := q.db.QueryRow(ctx, lookupRecipientByID, id)
+	var i LookupRecipientByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.DisplayName,
+		&i.Handle,
+		&i.PhoneE164,
+	)
+	return i, err
+}
+
 const lookupRecipientByPhone = `-- name: LookupRecipientByPhone :one
 SELECT u.id, u.display_name, u.handle, u.phone_e164
 FROM users u

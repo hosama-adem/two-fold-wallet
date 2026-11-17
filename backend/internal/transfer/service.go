@@ -48,9 +48,12 @@ func NewService(pool *pgxpool.Pool) *Service {
 }
 
 // Request is a validated send intent.
+// Set RecipientUserID to skip phone/@handle lookup (money-request pay).
+// Otherwise RecipientQuery must be a phone or @handle.
 type Request struct {
 	SenderUserID     uuid.UUID
 	RecipientQuery   string
+	RecipientUserID  uuid.UUID
 	AmountMinor      int64
 	Currency         string
 	Note             string
@@ -90,11 +93,11 @@ type PreviewRequest struct {
 
 // PreviewResult is what the confirm screen shows. No money moves.
 type PreviewResult struct {
-	AmountMinor     int64             `json:"amount_minor"`
-	FeeMinor        int64             `json:"fee_minor"`
-	TotalDebitMinor int64             `json:"total_debit_minor"`
-	Currency        string            `json:"currency"`
-	Recipient       PreviewRecipient  `json:"recipient"`
+	AmountMinor     int64            `json:"amount_minor"`
+	FeeMinor        int64            `json:"fee_minor"`
+	TotalDebitMinor int64            `json:"total_debit_minor"`
+	Currency        string           `json:"currency"`
+	Recipient       PreviewRecipient `json:"recipient"`
 }
 
 // PreviewRecipient is the identity card on the confirm screen.
@@ -167,7 +170,7 @@ func (s *Service) Preview(ctx context.Context, in PreviewRequest) (PreviewResult
 // Transfer moves amount_minor from the sender's ETB wallet to the recipient.
 //
 // Inside one database transaction:
-//  1. Resolve the recipient (phone or @handle).
+//  1. Resolve the recipient (phone, @handle, or RecipientUserID).
 //  2. Lock both wallets (and their accounts) in sorted wallet-id order.
 //  3. Check freeze, self-send, available balance, and KYC tier limits.
 //  4. Insert transactions as pending, post the p2p journal, mark completed.
@@ -180,11 +183,34 @@ func (s *Service) Transfer(ctx context.Context, in Request) (Result, error) {
 	if s.pool == nil {
 		return Result{}, httpx.Internal("Transfer store is not configured.")
 	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	out, err := s.TransferInTx(ctx, tx, in)
+	if err != nil {
+		return Result{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Result{}, err
+	}
+	return out, nil
+}
+
+// TransferInTx is Transfer on a caller-owned transaction. Money requests use it
+// so the pay claim and the p2p post commit together — two concurrent pays cannot
+// both move money (FR-REQ-4).
+func (s *Service) TransferInTx(ctx context.Context, tx pgx.Tx, in Request) (Result, error) {
+	if tx == nil {
+		return Result{}, httpx.Internal("Transfer transaction is required.")
+	}
 	if err := validateRequest(in); err != nil {
 		return Result{}, err
 	}
 
-	recipient, err := s.resolveRecipient(ctx, in.RecipientQuery)
+	recipient, err := s.resolveRecipientFor(ctx, in)
 	if err != nil {
 		return Result{}, err
 	}
@@ -199,12 +225,6 @@ func (s *Service) Transfer(ctx context.Context, in Request) (Result, error) {
 	if in.ExpectedFeeMinor != feeMinor {
 		return Result{}, errFeeChanged(in.ExpectedFeeMinor, feeMinor)
 	}
-
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return Result{}, err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
 
 	q := transferdb.New(tx)
 
@@ -334,9 +354,6 @@ func (s *Service) Transfer(ctx context.Context, in Request) (Result, error) {
 		return Result{}, httpx.Internal("Transfer did not complete.")
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return Result{}, err
-	}
 	return Result{Transaction: transactionFrom(completed)}, nil
 }
 
@@ -360,7 +377,7 @@ func validateRequest(in Request) error {
 	if in.SenderUserID == uuid.Nil {
 		return httpx.ValidationFailed("User id is required.")
 	}
-	if strings.TrimSpace(in.RecipientQuery) == "" {
+	if in.RecipientUserID == uuid.Nil && strings.TrimSpace(in.RecipientQuery) == "" {
 		return httpx.ValidationFailed("Recipient is required.")
 	}
 	if in.Currency != wallet.CurrencyETB && in.Currency != ledger.CurrencyETB {
@@ -376,6 +393,13 @@ func validateRequest(in Request) error {
 		return httpx.ValidationFailed("Note must be at most 140 characters.")
 	}
 	return nil
+}
+
+func (s *Service) resolveRecipientFor(ctx context.Context, in Request) (resolvedRecipient, error) {
+	if in.RecipientUserID != uuid.Nil {
+		return s.resolveRecipientByID(ctx, in.RecipientUserID)
+	}
+	return s.resolveRecipient(ctx, in.RecipientQuery)
 }
 
 func (s *Service) resolveRecipient(ctx context.Context, raw string) (resolvedRecipient, error) {
@@ -411,6 +435,19 @@ func (s *Service) resolveRecipient(ctx context.Context, raw string) (resolvedRec
 	default:
 		return resolvedRecipient{}, httpx.ValidationFailed("Enter a phone number or @handle.")
 	}
+}
+
+func (s *Service) resolveRecipientByID(ctx context.Context, userID uuid.UUID) (resolvedRecipient, error) {
+	row, err := transferdb.New(s.pool).LookupRecipientByID(ctx, userID)
+	if err != nil {
+		return resolvedRecipient{}, lookupError(err)
+	}
+	return resolvedRecipient{
+		UserID:      row.ID,
+		DisplayName: row.DisplayName,
+		Handle:      row.Handle,
+		PhoneE164:   row.PhoneE164,
+	}, nil
 }
 
 func lookupError(err error) error {

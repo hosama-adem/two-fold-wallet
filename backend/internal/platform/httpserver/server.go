@@ -13,6 +13,7 @@ import (
 	"github.com/hosama-adem/twofold/backend/internal/auth"
 	"github.com/hosama-adem/twofold/backend/internal/history"
 	"github.com/hosama-adem/twofold/backend/internal/kyc"
+	"github.com/hosama-adem/twofold/backend/internal/moneyrequest"
 	"github.com/hosama-adem/twofold/backend/internal/platform/config"
 	"github.com/hosama-adem/twofold/backend/internal/platform/database"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpx"
@@ -31,11 +32,12 @@ type Server struct {
 
 // Options configures optional HTTP mounts.
 type Options struct {
-	Auth      *auth.Handler
-	Wallets   *wallet.Handler
-	Transfers *transfer.Handler
-	KYC       *kyc.Handler
-	History   *history.Handler
+	Auth          *auth.Handler
+	Wallets       *wallet.Handler
+	Transfers     *transfer.Handler
+	KYC           *kyc.Handler
+	History       *history.Handler
+	MoneyRequests *moneyrequest.Handler
 	// RequestTimeout overrides the per-request deadline. Zero keeps the
 	// standard 10s timeout. The concurrency suite raises it: a thousand
 	// transfers on one pair queue on the row lock, and that wait is the proof,
@@ -102,6 +104,9 @@ func (s *Server) routes(opts Options) {
 	}
 	if opts.History != nil {
 		opts.History.Mount(s.engine)
+	}
+	if opts.MoneyRequests != nil {
+		opts.MoneyRequests.Mount(s.engine)
 	}
 	s.engine.NoRoute(s.handleNotFound)
 }

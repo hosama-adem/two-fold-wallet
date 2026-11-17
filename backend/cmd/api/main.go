@@ -13,6 +13,7 @@ import (
 	"github.com/hosama-adem/twofold/backend/internal/idempotency"
 	"github.com/hosama-adem/twofold/backend/internal/kyc"
 	"github.com/hosama-adem/twofold/backend/internal/limit"
+	"github.com/hosama-adem/twofold/backend/internal/moneyrequest"
 	"github.com/hosama-adem/twofold/backend/internal/pin"
 	"github.com/hosama-adem/twofold/backend/internal/platform/config"
 	"github.com/hosama-adem/twofold/backend/internal/platform/database"
@@ -85,8 +86,9 @@ func run() int {
 	authHandler := auth.NewHandler(authSvc, limiter)
 	walletHandler := wallet.NewHandler(wallets, authHandler.RequireAccess(), auth.UserIDFromContext)
 	idemStore := idempotency.NewStore(pool)
+	transfers := transfer.NewService(pool)
 	transferHandler := transfer.NewHandler(
-		transfer.NewService(pool),
+		transfers,
 		pins,
 		authHandler.RequireAccess(),
 		idempotency.Middleware(idemStore, auth.UserIDFromContext),
@@ -102,13 +104,21 @@ func run() int {
 		authHandler.RequireAccess(),
 		auth.UserIDFromContext,
 	)
+	moneyRequestHandler := moneyrequest.NewHandler(
+		moneyrequest.NewService(pool, transfers),
+		pins,
+		authHandler.RequireAccess(),
+		idempotency.Middleware(idemStore, auth.UserIDFromContext),
+		auth.UserIDFromContext,
+	)
 
 	srv := httpserver.New(cfg, pool, log, httpserver.Options{
-		Auth:      authHandler,
-		Wallets:   walletHandler,
-		Transfers: transferHandler,
-		KYC:       kycHandler,
-		History:   historyHandler,
+		Auth:          authHandler,
+		Wallets:       walletHandler,
+		Transfers:     transferHandler,
+		KYC:           kycHandler,
+		History:       historyHandler,
+		MoneyRequests: moneyRequestHandler,
 	})
 	if err := srv.Run(ctx); err != nil {
 		log.Error("server", "error", err)
