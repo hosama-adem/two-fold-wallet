@@ -33,7 +33,16 @@ func (s *Service) ForAmount(ctx context.Context, userID uuid.UUID, kind string, 
 	if s.pool == nil {
 		return 0, httpx.Internal("Fee store is not configured.")
 	}
-	q := feedb.New(s.pool)
+	return s.ForAmountOn(ctx, s.pool, userID, kind, amountMinor)
+}
+
+// ForAmountOn is ForAmount on a caller-owned DB handle (usually a pgx.Tx).
+// TransferInTx uses it so fee lookup does not borrow a second pool connection.
+func (s *Service) ForAmountOn(ctx context.Context, db feedb.DBTX, userID uuid.UUID, kind string, amountMinor int64) (int64, error) {
+	if db == nil {
+		return 0, httpx.Internal("Fee store is not configured.")
+	}
+	q := feedb.New(db)
 	tier, err := q.GetUserKYCTier(ctx, userID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

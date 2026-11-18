@@ -169,11 +169,13 @@ func (s *Service) Preview(ctx context.Context, in PreviewRequest) (PreviewResult
 
 // Transfer moves amount_minor from the sender's ETB wallet to the recipient.
 //
-// Inside one database transaction:
-//  1. Resolve the recipient (phone, @handle, or RecipientUserID).
-//  2. Lock both wallets (and their accounts) in sorted wallet-id order.
-//  3. Check freeze, self-send, available balance, and KYC tier limits.
-//  4. Insert transactions as pending, post the p2p journal, mark completed.
+// Recipient lookup and fee quote run on the pool *before* Begin so a burst of
+// concurrent transfers does not hold one connection per worker and then ask
+// the pool for another (that deadlock was a 500 under the daily-cap race).
+// Inside the transaction:
+//  1. Lock both wallets (and their accounts) in sorted wallet-id order.
+//  2. Check freeze, self-send, available balance, and KYC tier limits.
+//  3. Insert transactions as pending, post the p2p journal, mark completed.
 //
 // The fee is computed from fee_rules. expected_fee_minor must match or the
 // call returns 409 fee_changed and moves nothing (FR-TRF-3, PRD §7.3).
@@ -183,34 +185,11 @@ func (s *Service) Transfer(ctx context.Context, in Request) (Result, error) {
 	if s.pool == nil {
 		return Result{}, httpx.Internal("Transfer store is not configured.")
 	}
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return Result{}, err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	out, err := s.TransferInTx(ctx, tx, in)
-	if err != nil {
-		return Result{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return Result{}, err
-	}
-	return out, nil
-}
-
-// TransferInTx is Transfer on a caller-owned transaction. Money requests use it
-// so the pay claim and the p2p post commit together — two concurrent pays cannot
-// both move money (FR-REQ-4).
-func (s *Service) TransferInTx(ctx context.Context, tx pgx.Tx, in Request) (Result, error) {
-	if tx == nil {
-		return Result{}, httpx.Internal("Transfer transaction is required.")
-	}
 	if err := validateRequest(in); err != nil {
 		return Result{}, err
 	}
 
-	recipient, err := s.resolveRecipientFor(ctx, in)
+	recipient, err := s.resolveRecipientFor(ctx, transferdb.New(s.pool), in)
 	if err != nil {
 		return Result{}, err
 	}
@@ -226,6 +205,61 @@ func (s *Service) TransferInTx(ctx context.Context, tx pgx.Tx, in Request) (Resu
 		return Result{}, errFeeChanged(in.ExpectedFeeMinor, feeMinor)
 	}
 
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	out, err := s.transferOnTx(ctx, tx, in, recipient, feeMinor)
+	if err != nil {
+		return Result{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Result{}, err
+	}
+	return out, nil
+}
+
+// TransferInTx is Transfer on a caller-owned transaction. Money requests use it
+// so the pay claim and the p2p post commit together — two concurrent pays cannot
+// both move money (FR-REQ-4). Lookups stay on tx so Pay does not borrow a second
+// pool connection while the request row is locked.
+func (s *Service) TransferInTx(ctx context.Context, tx pgx.Tx, in Request) (Result, error) {
+	if tx == nil {
+		return Result{}, httpx.Internal("Transfer transaction is required.")
+	}
+	if err := validateRequest(in); err != nil {
+		return Result{}, err
+	}
+
+	q := transferdb.New(tx)
+	recipient, err := s.resolveRecipientFor(ctx, q, in)
+	if err != nil {
+		return Result{}, err
+	}
+	if recipient.UserID == in.SenderUserID {
+		return Result{}, errSelfTransfer()
+	}
+
+	feeMinor, err := s.fees.ForAmountOn(ctx, tx, in.SenderUserID, kindP2P, in.AmountMinor)
+	if err != nil {
+		return Result{}, err
+	}
+	if in.ExpectedFeeMinor != feeMinor {
+		return Result{}, errFeeChanged(in.ExpectedFeeMinor, feeMinor)
+	}
+
+	return s.transferOnTx(ctx, tx, in, recipient, feeMinor)
+}
+
+func (s *Service) transferOnTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	in Request,
+	recipient resolvedRecipient,
+	feeMinor int64,
+) (Result, error) {
 	q := transferdb.New(tx)
 
 	fromWallet, err := q.GetWalletByUserCurrency(ctx, transferdb.GetWalletByUserCurrencyParams{
@@ -395,19 +429,22 @@ func validateRequest(in Request) error {
 	return nil
 }
 
-func (s *Service) resolveRecipientFor(ctx context.Context, in Request) (resolvedRecipient, error) {
+func (s *Service) resolveRecipientFor(ctx context.Context, q *transferdb.Queries, in Request) (resolvedRecipient, error) {
 	if in.RecipientUserID != uuid.Nil {
-		return s.resolveRecipientByID(ctx, in.RecipientUserID)
+		return lookupRecipientByID(ctx, q, in.RecipientUserID)
 	}
-	return s.resolveRecipient(ctx, in.RecipientQuery)
+	return s.resolveRecipientOn(ctx, q, in.RecipientQuery)
 }
 
 func (s *Service) resolveRecipient(ctx context.Context, raw string) (resolvedRecipient, error) {
+	return s.resolveRecipientOn(ctx, transferdb.New(s.pool), raw)
+}
+
+func (s *Service) resolveRecipientOn(ctx context.Context, q *transferdb.Queries, raw string) (resolvedRecipient, error) {
 	query, err := wallet.ParseLookup(raw)
 	if err != nil {
 		return resolvedRecipient{}, err
 	}
-	q := transferdb.New(s.pool)
 	switch query.Kind {
 	case wallet.QueryPhone:
 		row, err := q.LookupRecipientByPhone(ctx, query.Value)
@@ -437,8 +474,8 @@ func (s *Service) resolveRecipient(ctx context.Context, raw string) (resolvedRec
 	}
 }
 
-func (s *Service) resolveRecipientByID(ctx context.Context, userID uuid.UUID) (resolvedRecipient, error) {
-	row, err := transferdb.New(s.pool).LookupRecipientByID(ctx, userID)
+func lookupRecipientByID(ctx context.Context, q *transferdb.Queries, userID uuid.UUID) (resolvedRecipient, error) {
+	row, err := q.LookupRecipientByID(ctx, userID)
 	if err != nil {
 		return resolvedRecipient{}, lookupError(err)
 	}
