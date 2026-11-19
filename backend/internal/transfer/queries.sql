@@ -46,6 +46,18 @@ WHERE u.status = 'active'
   AND u.phone_verified_at IS NOT NULL
   AND u.handle = $1;
 
+-- name: LookupRecipientByID :one
+-- Used when paying a money request: the recipient is already known by user id.
+SELECT u.id, u.display_name, u.handle, u.phone_e164
+FROM users u
+JOIN wallets w
+  ON w.user_id = u.id
+ AND w.currency = 'ETB'
+ AND w.status <> 'closed'
+WHERE u.status = 'active'
+  AND u.phone_verified_at IS NOT NULL
+  AND u.id = $1;
+
 -- name: InsertTransaction :one
 INSERT INTO transactions (
     id,

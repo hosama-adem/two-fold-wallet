@@ -84,6 +84,20 @@ type KycSubmission struct {
 	CreatedAt    time.Time       `json:"created_at"`
 }
 
+type MoneyRequest struct {
+	ID                uuid.UUID  `json:"id"`
+	RequesterID       uuid.UUID  `json:"requester_id"`
+	PayerID           uuid.UUID  `json:"payer_id"`
+	AmountMinor       int64      `json:"amount_minor"`
+	Currency          string     `json:"currency"`
+	Note              *string    `json:"note"`
+	Status            string     `json:"status"`
+	PaidTransactionID *uuid.UUID `json:"paid_transaction_id"`
+	ExpiresAt         time.Time  `json:"expires_at"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+}
+
 type OtpCode struct {
 	ID         uuid.UUID  `json:"id"`
 	PhoneE164  string     `json:"phone_e164"`
