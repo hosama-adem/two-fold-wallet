@@ -1,0 +1,15 @@
+# Redocly lint config for the customer OpenAPI contract (Day 21 / #50).
+extends:
+  - recommended
+
+apis:
+  customer@v1:
+    root: openapi.yaml
+
+rules:
+  no-unused-components: warn
+  operation-operationId: off
+  info-license: off
+  tag-description: off
+  # Health/ready are unauthenticated probes; 4xx is optional there.
+  operation-4xx-response: warn
