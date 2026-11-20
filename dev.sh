@@ -20,10 +20,11 @@ DATABASE_URL="${DATABASE_URL:-postgres://twofold:twofold@127.0.0.1:5434/twofold?
 cmd="${1:-}"
 case "$cmd" in
   up)
-    docker compose -f "$ROOT/docker-compose.yml" up -d db
+    docker compose -f "$ROOT/docker-compose.yml" up -d db simulator
     echo "waiting for postgres..."
     until docker compose -f "$ROOT/docker-compose.yml" exec -T db pg_isready -U twofold -d twofold >/dev/null 2>&1; do sleep 1; done
     echo "twofold-db is ready"
+    echo "simulator on :8091"
     ;;
   down)
     docker compose -f "$ROOT/docker-compose.yml" down
@@ -32,8 +33,12 @@ case "$cmd" in
     [[ -f "$ROOT/.env" ]] || { echo "missing .env — copy .env.example to .env"; exit 1; }
     cd "$BACKEND" && go run ./cmd/api
     ;;
+  simulator)
+    [[ -f "$ROOT/.env" ]] || { echo "missing .env — copy .env.example to .env"; exit 1; }
+    cd "$BACKEND" && go run ./cmd/simulator
+    ;;
   build)
-    cd "$BACKEND" && go build -o bin/api ./cmd/api
+    cd "$BACKEND" && go build -o bin/api ./cmd/api && go build -o bin/simulator ./cmd/simulator
     ;;
   test)
     # -p 1: packages may share one Postgres; avoid migrate/user races

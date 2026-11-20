@@ -18,5 +18,23 @@ services:
       timeout: 5s
       retries: 10
 
+  # Day 22 — fake payment rail. Amount suffixes drive decline/delay/dup/silent.
+  simulator:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.simulator
+    container_name: twofold-simulator
+    restart: unless-stopped
+    environment:
+      SIMULATOR_ADDR: ":8091"
+      SIMULATOR_HMAC_SECRET: ${SIMULATOR_HMAC_SECRET:-dev-simulator-hmac-secret}
+      # host.docker.internal reaches the API on the developer machine (Day 23 webhook).
+      CALLBACK_URL: ${CALLBACK_URL:-http://host.docker.internal:8080/webhooks/providers/simulator}
+      WEBHOOK_DELAY: ${WEBHOOK_DELAY:-2s}
+    ports:
+      - "8091:8091"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
 volumes:
   twofold-pgdata:
