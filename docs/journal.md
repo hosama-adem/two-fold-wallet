@@ -72,3 +72,13 @@ Two lines per merged day: what you learned, what surprised you.
 
 - Learned: A→B and B→A stay deadlock-free only when both lock the two wallets in the same sorted id order. The waiter blocks on the first lock, then reads the balance the winner committed, which is why a drain cannot cross zero.
 - Surprised: the hot row is the dangerous one. Locking `fee_revenue` would make every transfer in the platform queue on a single tuple, so those system accounts stay unlocked and the drift job owns their cache. Argon2 is also the wrong thing to measure here — a thousand PIN hashes would hide the ledger — so the suite keeps the real handler and skips the hasher.
+
+## docs: OpenAPI 3.1 contract in CI
+
+- Learned: the customer API contract is a file CI owns — Redocly lints the YAML, and kin-openapi checks live JSON against it, so renaming a response field without updating `docs/openapi.yaml` fails the build.
+- Surprised: money fields stay plain int64 minors in the schema; “pretty ETB” belongs in clients. Serving `/docs` only in development keeps the explorer off production while the contract still ships in git.
+
+## Week 3 review — send money with fee and limits
+
+- Demo: register → verify → set PIN → preview fee → transfer under tier caps → history receipt. Fee preview and `expected_fee_minor` stop a stale quote; daily/per-txn limits refuse the next send with `limit_exceeded` and remaining room.
+- Journal: M3 closes with an OpenAPI tripwire. The next week starts async — provider simulator, top-ups, withdrawals.

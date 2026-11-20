@@ -1,0 +1,1435 @@
+openapi: 3.1.0
+info:
+  title: Twofold Customer API
+  version: 0.3.0
+  summary: Customer-facing wallet API for Ethiopia (ETB minor units).
+  description: |
+    Every birr, recorded twice. Money fields are integer minor units
+    (1 ETB = 100). Errors use RFC 9457 `application/problem+json`.
+    Money-moving POSTs require an `Idempotency-Key` (UUID v4) and a
+    transaction PIN where noted.
+  contact:
+    name: Twofold
+servers:
+  - url: http://localhost:8080
+    description: Local development
+tags:
+  - name: Health
+  - name: Auth
+  - name: Profile
+  - name: Wallets
+  - name: Transfers
+  - name: History
+  - name: Requests
+  - name: KYC
+security: []
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Liveness
+      operationId: getHealth
+      responses:
+        "200":
+          description: Process is up
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+              example:
+                status: ok
+                service: twofold-api
+
+  /ready:
+    get:
+      tags: [Health]
+      summary: Readiness (database)
+      operationId: getReady
+      responses:
+        "200":
+          description: Database is reachable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadyStatus"
+        "503":
+          $ref: "#/components/responses/Problem"
+
+  /v1/auth/register:
+    post:
+      tags: [Auth]
+      summary: Start sign-up (opaque success)
+      operationId: register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+            example:
+              phone: "+251911000001"
+              password: "correct-horse-1"
+              display_name: "Abel Bekele"
+      responses:
+        "201":
+          description: Generic success (anti-enumeration)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+        "422":
+          $ref: "#/components/responses/Problem"
+        "429":
+          $ref: "#/components/responses/Problem"
+
+  /v1/auth/verify-phone:
+    post:
+      tags: [Auth]
+      summary: Verify OTP and activate
+      operationId: verifyPhone
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerifyPhoneRequest"
+      responses:
+        "200":
+          description: Phone verified
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+        "422":
+          $ref: "#/components/responses/Problem"
+        "429":
+          $ref: "#/components/responses/Problem"
+
+  /v1/auth/resend-otp:
+    post:
+      tags: [Auth]
+      summary: Resend verification OTP
+      operationId: resendOTP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResendOTPRequest"
+      responses:
+        "200":
+          description: Generic success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+        "422":
+          $ref: "#/components/responses/Problem"
+        "429":
+          $ref: "#/components/responses/Problem"
+
+  /v1/auth/login:
+    post:
+      tags: [Auth]
+      summary: Login
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Access + refresh tokens
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+        "429":
+          $ref: "#/components/responses/Problem"
+
+  /v1/auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Rotate refresh token
+      operationId: refresh
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshRequest"
+      responses:
+        "200":
+          description: New token pair
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
+        "401":
+          $ref: "#/components/responses/Problem"
+
+  /v1/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke current refresh session
+      operationId: logout
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LogoutRequest"
+      responses:
+        "204":
+          description: Logged out
+        "401":
+          $ref: "#/components/responses/Problem"
+
+  /v1/me:
+    get:
+      tags: [Profile]
+      summary: Current profile and limit usage
+      operationId: getMe
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MeProfile"
+        "401":
+          $ref: "#/components/responses/Problem"
+
+  /v1/me/pin:
+    put:
+      tags: [Profile]
+      summary: Set or change transaction PIN
+      operationId: setPIN
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetPINRequest"
+      responses:
+        "200":
+          description: PIN updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "403":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+
+  /v1/me/sessions:
+    get:
+      tags: [Profile]
+      summary: List active sessions
+      operationId: listSessions
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Sessions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionsResponse"
+        "401":
+          $ref: "#/components/responses/Problem"
+
+  /v1/me/sessions/{id}:
+    delete:
+      tags: [Profile]
+      summary: Revoke a session
+      operationId: revokeSession
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      responses:
+        "204":
+          description: Revoked
+        "401":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+
+  /v1/wallets:
+    get:
+      tags: [Wallets]
+      summary: List wallets with available and ledger balances
+      operationId: listWallets
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Wallets
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletList"
+        "401":
+          $ref: "#/components/responses/Problem"
+
+  /v1/recipients/lookup:
+    get:
+      tags: [Wallets]
+      summary: Look up a recipient by phone or @handle
+      operationId: lookupRecipient
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 32
+          description: Phone (E.164 or local) or @handle
+      responses:
+        "200":
+          description: Recipient card (phone masked)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Recipient"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+
+  /v1/transfers/preview:
+    post:
+      tags: [Transfers]
+      summary: Fee preview (no money moves)
+      operationId: previewTransfer
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransferPreviewRequest"
+            example:
+              recipient: "+251911000002"
+              amount_minor: 5000
+              currency: ETB
+      responses:
+        "200":
+          description: Quote
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransferPreview"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+
+  /v1/transfers:
+    post:
+      tags: [Transfers]
+      summary: Send money (P2P)
+      operationId: createTransfer
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransferCreateRequest"
+            example:
+              recipient: "+251911000002"
+              amount_minor: 5000
+              currency: ETB
+              pin: "2468"
+              expected_fee_minor: 0
+              note: "lunch"
+      responses:
+        "201":
+          description: Transfer completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransferResult"
+        "400":
+          $ref: "#/components/responses/Problem"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "403":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+
+  /v1/transactions:
+    get:
+      tags: [History]
+      summary: Paginated transaction history (newest first)
+      operationId: listTransactions
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: cursor
+          in: query
+          schema:
+            type: string
+        - name: kind
+          in: query
+          schema:
+            type: string
+            enum: [p2p, top_up, cash_out, merchant_payment, money_request, adjustment]
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, processing, needs_review, completed, failed, reversed, expired, cancelled]
+        - name: from
+          in: query
+          description: Inclusive RFC3339 lower bound on created_at
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          description: Exclusive RFC3339 upper bound on created_at
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        "200":
+          description: Page of history items
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HistoryList"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+
+  /v1/transactions/export.csv:
+    get:
+      tags: [History]
+      summary: Stream CSV export (max 12 months)
+      operationId: exportTransactionsCSV
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: CSV attachment
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+              example: attachment; filename="transactions.csv"
+          content:
+            text/csv:
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+
+  /v1/transactions/{reference}:
+    get:
+      tags: [History]
+      summary: Receipt for a participant
+      operationId: getTransactionReceipt
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: reference
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Receipt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Receipt"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+
+  /v1/requests:
+    post:
+      tags: [Requests]
+      summary: Ask someone for money
+      operationId: createMoneyRequest
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MoneyRequestCreate"
+      responses:
+        "201":
+          description: Pending request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MoneyRequest"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+    get:
+      tags: [Requests]
+      summary: Incoming or outgoing money requests
+      operationId: listMoneyRequests
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: box
+          in: query
+          schema:
+            type: string
+            enum: [incoming, outgoing]
+            default: incoming
+      responses:
+        "200":
+          description: Request list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MoneyRequestList"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+
+  /v1/requests/{id}/pay:
+    post:
+      tags: [Requests]
+      summary: Pay a pending request (runs P2P transfer)
+      operationId: payMoneyRequest
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MoneyRequestPay"
+      responses:
+        "200":
+          description: Paid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MoneyRequestPayResult"
+        "400":
+          $ref: "#/components/responses/Problem"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "403":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+
+  /v1/requests/{id}/decline:
+    post:
+      tags: [Requests]
+      summary: Payer declines a pending request
+      operationId: declineMoneyRequest
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      responses:
+        "200":
+          description: Declined
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MoneyRequest"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "403":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+
+  /v1/requests/{id}/cancel:
+    post:
+      tags: [Requests]
+      summary: Requester cancels a pending request
+      operationId: cancelMoneyRequest
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      responses:
+        "200":
+          description: Cancelled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MoneyRequest"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "403":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+
+  /v1/kyc/submissions:
+    post:
+      tags: [KYC]
+      summary: Submit KYC upgrade request
+      operationId: submitKYC
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KYCSubmitRequest"
+      responses:
+        "201":
+          description: Submission recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KYCSubmission"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Short-lived customer access token from login/refresh.
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: UUID v4. Replays with the same key and body return the first response.
+      schema:
+        type: string
+        format: uuid
+      example: 550e8400-e29b-41d4-a716-446655440000
+    UUIDPath:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    Problem:
+      description: RFC 9457 problem details
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          example:
+            type: https://twofold.dev/errors/validation_failed
+            title: Unprocessable Entity
+            status: 422
+            detail: Amount must be a positive amount within limits.
+            code: validation_failed
+            request_id: 018f7b2c-1a2b-7c3d-8e4f-5a6b7c8d9e0f
+
+  schemas:
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          format: uri
+          example: https://twofold.dev/errors/validation_failed
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        code:
+          type: string
+        request_id:
+          type: string
+        tries_remaining:
+          type: [integer, "null"]
+        locked_until:
+          type: [string, "null"]
+          format: date-time
+        limit:
+          type: [string, "null"]
+        remaining_minor:
+          type: [integer, "null"]
+          format: int64
+
+    HealthStatus:
+      type: object
+      required: [status, service]
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          const: ok
+        service:
+          type: string
+          const: twofold-api
+
+    ReadyStatus:
+      type: object
+      required: [status]
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          const: ready
+
+    Message:
+      type: object
+      required: [message]
+      additionalProperties: false
+      properties:
+        message:
+          type: string
+
+    RegisterRequest:
+      type: object
+      required: [phone, password, display_name]
+      additionalProperties: false
+      properties:
+        phone:
+          type: string
+        password:
+          type: string
+          minLength: 8
+        display_name:
+          type: string
+
+    VerifyPhoneRequest:
+      type: object
+      required: [phone, code]
+      additionalProperties: false
+      properties:
+        phone:
+          type: string
+        code:
+          type: string
+          pattern: "^[0-9]{6}$"
+
+    ResendOTPRequest:
+      type: object
+      required: [phone]
+      additionalProperties: false
+      properties:
+        phone:
+          type: string
+
+    LoginRequest:
+      type: object
+      required: [phone, password]
+      additionalProperties: false
+      properties:
+        phone:
+          type: string
+        password:
+          type: string
+
+    RefreshRequest:
+      type: object
+      required: [refresh_token]
+      additionalProperties: false
+      properties:
+        refresh_token:
+          type: string
+
+    LogoutRequest:
+      type: object
+      required: [refresh_token]
+      additionalProperties: false
+      properties:
+        refresh_token:
+          type: string
+
+    TokenResponse:
+      type: object
+      required: [access_token, refresh_token, token_type, expires_in]
+      additionalProperties: false
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        token_type:
+          type: string
+          const: Bearer
+        expires_in:
+          type: integer
+          format: int64
+          description: Access token lifetime in seconds
+
+    SetPINRequest:
+      type: object
+      required: [pin]
+      additionalProperties: false
+      properties:
+        password:
+          type: string
+          description: Required when setting the first PIN
+        old_pin:
+          type: string
+          description: Required when changing an existing PIN
+        pin:
+          type: string
+          pattern: "^[0-9]{4}$"
+
+    LimitCaps:
+      type: object
+      required: [max_balance_minor, per_txn_minor, daily_minor, monthly_minor, can_withdraw]
+      additionalProperties: false
+      properties:
+        max_balance_minor:
+          type: integer
+          format: int64
+        per_txn_minor:
+          type: integer
+          format: int64
+        daily_minor:
+          type: integer
+          format: int64
+        monthly_minor:
+          type: integer
+          format: int64
+        can_withdraw:
+          type: boolean
+
+    LimitUsage:
+      type: object
+      required:
+        - tier
+        - caps
+        - balance_minor
+        - daily_used_minor
+        - monthly_used_minor
+        - daily_remaining_minor
+        - monthly_remaining_minor
+        - balance_remaining_minor
+      additionalProperties: false
+      properties:
+        tier:
+          type: integer
+        caps:
+          $ref: "#/components/schemas/LimitCaps"
+        balance_minor:
+          type: integer
+          format: int64
+        daily_used_minor:
+          type: integer
+          format: int64
+        monthly_used_minor:
+          type: integer
+          format: int64
+        daily_remaining_minor:
+          type: integer
+          format: int64
+        monthly_remaining_minor:
+          type: integer
+          format: int64
+        balance_remaining_minor:
+          type: integer
+          format: int64
+
+    MeProfile:
+      type: object
+      required:
+        - id
+        - phone
+        - display_name
+        - kyc_tier
+        - status
+        - created_at
+        - updated_at
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        phone:
+          type: string
+        handle:
+          type: [string, "null"]
+        display_name:
+          type: string
+        kyc_tier:
+          type: integer
+        status:
+          type: string
+        phone_verified_at:
+          type: [string, "null"]
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        limits:
+          $ref: "#/components/schemas/LimitUsage"
+
+    SessionView:
+      type: object
+      required: [id, created_at, expires_at, current]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_agent:
+          type: [string, "null"]
+        ip:
+          type: [string, "null"]
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        current:
+          type: boolean
+
+    SessionsResponse:
+      type: object
+      required: [sessions]
+      additionalProperties: false
+      properties:
+        sessions:
+          type: array
+          items:
+            $ref: "#/components/schemas/SessionView"
+
+    WalletBalance:
+      type: object
+      required:
+        - id
+        - currency
+        - status
+        - freeze_mode
+        - ledger_balance_minor
+        - available_balance_minor
+        - held_minor
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        currency:
+          type: string
+          pattern: "^[A-Z]{3}$"
+        status:
+          type: string
+          enum: [active, frozen, closed]
+        freeze_mode:
+          type: string
+          enum: [none, debit, full]
+        frozen_reason:
+          type: string
+        ledger_balance_minor:
+          type: integer
+          format: int64
+        available_balance_minor:
+          type: integer
+          format: int64
+        held_minor:
+          type: integer
+          format: int64
+
+    WalletList:
+      type: object
+      required: [wallets]
+      additionalProperties: false
+      properties:
+        wallets:
+          type: array
+          items:
+            $ref: "#/components/schemas/WalletBalance"
+
+    Recipient:
+      type: object
+      required: [id, display_name, phone_masked]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        display_name:
+          type: string
+        handle:
+          type: string
+        phone_masked:
+          type: string
+
+    TransferPreviewRequest:
+      type: object
+      required: [recipient, amount_minor]
+      additionalProperties: false
+      properties:
+        recipient:
+          type: string
+        amount_minor:
+          type: integer
+          format: int64
+          exclusiveMinimum: 0
+        currency:
+          type: string
+          default: ETB
+
+    TransferPreview:
+      type: object
+      required: [amount_minor, fee_minor, total_debit_minor, currency, recipient]
+      additionalProperties: false
+      properties:
+        amount_minor:
+          type: integer
+          format: int64
+        fee_minor:
+          type: integer
+          format: int64
+        total_debit_minor:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        recipient:
+          $ref: "#/components/schemas/PreviewRecipient"
+
+    PreviewRecipient:
+      type: object
+      required: [display_name, phone_masked]
+      additionalProperties: false
+      properties:
+        display_name:
+          type: string
+        handle:
+          type: string
+        phone_masked:
+          type: string
+
+    TransferCreateRequest:
+      type: object
+      required: [recipient, amount_minor, pin, expected_fee_minor]
+      additionalProperties: false
+      properties:
+        recipient:
+          type: string
+        amount_minor:
+          type: integer
+          format: int64
+          exclusiveMinimum: 0
+        currency:
+          type: string
+          default: ETB
+        pin:
+          type: string
+          pattern: "^[0-9]{4}$"
+        note:
+          type: string
+          maxLength: 140
+        expected_fee_minor:
+          type: integer
+          format: int64
+          minimum: 0
+
+    Transaction:
+      type: object
+      required:
+        - id
+        - reference
+        - kind
+        - status
+        - amount_minor
+        - fee_minor
+        - currency
+        - from_wallet_id
+        - to_wallet_id
+        - created_at
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        reference:
+          type: string
+        kind:
+          type: string
+        status:
+          type: string
+        amount_minor:
+          type: integer
+          format: int64
+        fee_minor:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        note:
+          type: string
+        from_wallet_id:
+          type: string
+          format: uuid
+        to_wallet_id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        idempotency_key:
+          type: string
+
+    TransferResult:
+      type: object
+      required: [transaction]
+      additionalProperties: false
+      properties:
+        transaction:
+          $ref: "#/components/schemas/Transaction"
+
+    Counterparty:
+      type: object
+      additionalProperties: false
+      properties:
+        display_name:
+          type: string
+        handle:
+          type: string
+        phone_masked:
+          type: string
+
+    HistoryItem:
+      type: object
+      required:
+        - id
+        - reference
+        - kind
+        - status
+        - amount_minor
+        - fee_minor
+        - currency
+        - created_at
+        - direction
+        - signed_amount_minor
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        reference:
+          type: string
+        kind:
+          type: string
+        status:
+          type: string
+        amount_minor:
+          type: integer
+          format: int64
+        fee_minor:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        note:
+          type: string
+        from_wallet_id:
+          type: string
+          format: uuid
+        to_wallet_id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        direction:
+          type: string
+          enum: [in, out, neutral]
+        counterparty:
+          $ref: "#/components/schemas/Counterparty"
+        signed_amount_minor:
+          type: integer
+          format: int64
+
+    HistoryList:
+      type: object
+      required: [items]
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/HistoryItem"
+        next_cursor:
+          type: string
+
+    Receipt:
+      type: object
+      required:
+        - reference
+        - created_at
+        - created_at_addis
+        - amount_minor
+        - fee_minor
+        - currency
+        - status
+        - kind
+        - direction
+        - balance_after_minor
+      additionalProperties: false
+      properties:
+        reference:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        created_at_addis:
+          type: string
+        amount_minor:
+          type: integer
+          format: int64
+        fee_minor:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        status:
+          type: string
+        kind:
+          type: string
+        note:
+          type: string
+        direction:
+          type: string
+          enum: [in, out, neutral]
+        counterparty:
+          $ref: "#/components/schemas/Counterparty"
+        balance_after_minor:
+          type: [integer, "null"]
+          format: int64
+
+    MoneyRequestCreate:
+      type: object
+      required: [payer, amount_minor]
+      additionalProperties: false
+      properties:
+        payer:
+          type: string
+          description: Phone or @handle of the payer
+        amount_minor:
+          type: integer
+          format: int64
+          exclusiveMinimum: 0
+        currency:
+          type: string
+          default: ETB
+        note:
+          type: string
+          maxLength: 140
+
+    MoneyRequestParty:
+      type: object
+      required: [display_name, phone_masked]
+      additionalProperties: false
+      properties:
+        display_name:
+          type: string
+        handle:
+          type: string
+        phone_masked:
+          type: string
+
+    MoneyRequest:
+      type: object
+      required:
+        - id
+        - amount_minor
+        - currency
+        - status
+        - expires_at
+        - created_at
+        - counterparty
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        amount_minor:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        note:
+          type: string
+        status:
+          type: string
+          enum: [pending, paid, declined, cancelled, expired]
+        expires_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        paid_transaction_id:
+          type: string
+          format: uuid
+        counterparty:
+          $ref: "#/components/schemas/MoneyRequestParty"
+
+    MoneyRequestList:
+      type: object
+      required: [items]
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/MoneyRequest"
+
+    MoneyRequestPay:
+      type: object
+      required: [pin, expected_fee_minor]
+      additionalProperties: false
+      properties:
+        pin:
+          type: string
+          pattern: "^[0-9]{4}$"
+        expected_fee_minor:
+          type: integer
+          format: int64
+          minimum: 0
+
+    MoneyRequestPayResult:
+      type: object
+      required: [request, transaction]
+      additionalProperties: false
+      properties:
+        request:
+          $ref: "#/components/schemas/MoneyRequest"
+        transaction:
+          $ref: "#/components/schemas/Transaction"
+
+    KYCSubmitRequest:
+      type: object
+      required: [target_tier]
+      additionalProperties: false
+      properties:
+        target_tier:
+          type: integer
+          enum: [1, 2]
+        data:
+          type: object
+          additionalProperties: true
+        document_keys:
+          type: array
+          items:
+            type: string
+          maxItems: 8
+
+    KYCSubmission:
+      type: object
+      required: [id, target_tier, data, document_keys, status, created_at]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        target_tier:
+          type: integer
+        data:
+          type: object
+          additionalProperties: true
+        document_keys:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+          enum: [submitted, approved, rejected]
+        created_at:
+          type: string
+          format: date-time

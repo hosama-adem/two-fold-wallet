@@ -17,6 +17,7 @@ import (
 	"github.com/hosama-adem/twofold/backend/internal/platform/config"
 	"github.com/hosama-adem/twofold/backend/internal/platform/database"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpx"
+	"github.com/hosama-adem/twofold/backend/internal/platform/openapi"
 	"github.com/hosama-adem/twofold/backend/internal/transfer"
 	"github.com/hosama-adem/twofold/backend/internal/wallet"
 )
@@ -90,6 +91,12 @@ func (s *Server) Engine() *gin.Engine {
 func (s *Server) routes(opts Options) {
 	s.engine.GET("/health", s.handleHealth)
 	s.engine.GET("/ready", s.handleReady)
+	// Customer API docs are a local development affordance (Day 21). Production
+	// keeps the contract in git; it does not ship the interactive explorer.
+	if s.cfg.AppEnv == "development" {
+		s.engine.GET("/openapi.yaml", s.handleOpenAPISpec)
+		s.engine.GET("/docs", s.handleDocs)
+	}
 	if opts.Auth != nil {
 		opts.Auth.Mount(s.engine)
 	}
@@ -110,6 +117,37 @@ func (s *Server) routes(opts Options) {
 	}
 	s.engine.NoRoute(s.handleNotFound)
 }
+
+func (s *Server) handleOpenAPISpec(c *gin.Context) {
+	path, err := openapi.SpecPath()
+	if err != nil {
+		httpx.WriteError(c, httpx.NotFound("OpenAPI spec is not available."))
+		return
+	}
+	c.Header("Content-Type", "application/yaml; charset=utf-8")
+	c.File(path)
+}
+
+func (s *Server) handleDocs(c *gin.Context) {
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	_, _ = c.Writer.Write([]byte(docsHTML))
+}
+
+// docsHTML is a tiny Redoc shell that loads the local /openapi.yaml.
+const docsHTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Twofold Customer API</title>
+  <style>body { margin: 0; padding: 0; }</style>
+</head>
+<body>
+  <redoc spec-url="/openapi.yaml"></redoc>
+  <script src="https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js"></script>
+</body>
+</html>
+`
 
 func (s *Server) handleHealth(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{

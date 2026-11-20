@@ -56,6 +56,10 @@ jobs:
         working-directory: backend
         run: go vet ./...
 
+      - name: Lint OpenAPI (Redocly)
+        # Day 21 / #50 — contract must stay a valid OpenAPI 3.1 document.
+        run: npx --yes @redocly/cli@1.25.0 lint docs/openapi.yaml --config docs/redocly.yaml
+
       - name: Migrate up / down / up
         working-directory: backend
         run: |
@@ -67,6 +71,7 @@ jobs:
         working-directory: backend
         # -p 1: one shared Postgres service — avoid migrate/user package races.
         # The 1,000-transfer suite runs in its own step, 20× with -race.
+        # OpenAPI contract tests (kin-openapi) live under internal/platform/openapi.
         run: go test -p 1 ./... -skip '^TestConcurrency'
 
       - name: Concurrency suite ×20 (race)
