@@ -25,6 +25,10 @@ type Config struct {
 	ShutdownTimeout    time.Duration
 	DBMaxConns         int32
 	DBMinConns         int32
+	// Provider rail (Day 22/23). Empty BaseURL disables top-up initiation in API.
+	ProviderBaseURL    string
+	ProviderHMACSecret string
+	ProviderName       string
 }
 
 // Load reads configuration from the environment.
@@ -49,6 +53,9 @@ func Load() (Config, error) {
 		ShutdownTimeout:     durationEnv("SHUTDOWN_TIMEOUT", 10*time.Second),
 		DBMaxConns:          int32Env("DB_MAX_CONNS", 10),
 		DBMinConns:          int32Env("DB_MIN_CONNS", 1),
+		ProviderBaseURL:     getenv("PROVIDER_BASE_URL", "http://127.0.0.1:8091"),
+		ProviderHMACSecret:  getenv("SIMULATOR_HMAC_SECRET", getenv("PROVIDER_HMAC_SECRET", "dev-simulator-hmac-secret")),
+		ProviderName:        getenv("PROVIDER_NAME", "simulator"),
 	}
 
 	if cfg.DatabaseURL == "" {
