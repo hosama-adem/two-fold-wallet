@@ -23,17 +23,16 @@ func NewReference() (string, error) {
 }
 
 func validReference(ref string) bool {
+	// Shape: TU-XXXX-XXXX. Prefix "TU" is a kind label (U is not in Crockford);
+	// only the eight entropy chars must be in the alphabet.
 	if len(ref) != 12 {
 		return false
 	}
 	if !strings.HasPrefix(ref, "TU-") || ref[7] != '-' {
 		return false
 	}
-	for i, r := range ref {
-		if i == 2 || i == 7 {
-			continue
-		}
-		if !strings.ContainsRune(referenceAlphabet, r) {
+	for _, i := range []int{3, 4, 5, 6, 8, 9, 10, 11} {
+		if !strings.ContainsRune(referenceAlphabet, rune(ref[i])) {
 			return false
 		}
 	}
