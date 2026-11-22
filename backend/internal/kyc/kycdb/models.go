@@ -121,6 +121,20 @@ type Posting struct {
 	CreatedAt         time.Time `json:"created_at"`
 }
 
+type ProviderPayment struct {
+	ID            uuid.UUID       `json:"id"`
+	TransactionID uuid.UUID       `json:"transaction_id"`
+	Provider      string          `json:"provider"`
+	Direction     string          `json:"direction"`
+	ProviderRef   string          `json:"provider_ref"`
+	Status        string          `json:"status"`
+	AmountMinor   int64           `json:"amount_minor"`
+	Currency      string          `json:"currency"`
+	Raw           json.RawMessage `json:"raw"`
+	CreatedAt     time.Time       `json:"created_at"`
+	UpdatedAt     time.Time       `json:"updated_at"`
+}
+
 type Session struct {
 	ID          uuid.UUID  `json:"id"`
 	UserID      uuid.UUID  `json:"user_id"`
@@ -220,4 +234,12 @@ type WalletHold struct {
 	Status      string     `json:"status"`
 	CreatedAt   time.Time  `json:"created_at"`
 	ReleasedAt  *time.Time `json:"released_at"`
+}
+
+type WebhookEvent struct {
+	Provider      string     `json:"provider"`
+	EventID       string     `json:"event_id"`
+	ReceivedAt    time.Time  `json:"received_at"`
+	PayloadHash   string     `json:"payload_hash"`
+	TransactionID *uuid.UUID `json:"transaction_id"`
 }

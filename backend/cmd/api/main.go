@@ -9,6 +9,7 @@ import (
 
 	"github.com/hosama-adem/twofold/backend/internal/audit"
 	"github.com/hosama-adem/twofold/backend/internal/auth"
+	"github.com/hosama-adem/twofold/backend/internal/funding"
 	"github.com/hosama-adem/twofold/backend/internal/history"
 	"github.com/hosama-adem/twofold/backend/internal/idempotency"
 	"github.com/hosama-adem/twofold/backend/internal/kyc"
@@ -19,6 +20,7 @@ import (
 	"github.com/hosama-adem/twofold/backend/internal/platform/database"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpserver"
 	"github.com/hosama-adem/twofold/backend/internal/platform/ratelimit"
+	"github.com/hosama-adem/twofold/backend/internal/provider"
 	"github.com/hosama-adem/twofold/backend/internal/session"
 	"github.com/hosama-adem/twofold/backend/internal/transfer"
 	"github.com/hosama-adem/twofold/backend/internal/user"
@@ -112,6 +114,23 @@ func run() int {
 		auth.UserIDFromContext,
 	)
 
+	var fundingHandler *funding.Handler
+	rail, railErr := provider.NewClient(provider.ClientConfig{
+		Name:       cfg.ProviderName,
+		BaseURL:    cfg.ProviderBaseURL,
+		HMACSecret: cfg.ProviderHMACSecret,
+	})
+	if railErr != nil {
+		log.Warn("provider client disabled", "error", railErr)
+	} else {
+		fundingHandler = funding.NewHandler(
+			funding.NewService(pool, rail, audits, log),
+			authHandler.RequireAccess(),
+			idempotency.Middleware(idemStore, auth.UserIDFromContext),
+			auth.UserIDFromContext,
+		)
+	}
+
 	srv := httpserver.New(cfg, pool, log, httpserver.Options{
 		Auth:          authHandler,
 		Wallets:       walletHandler,
@@ -119,6 +138,7 @@ func run() int {
 		KYC:           kycHandler,
 		History:       historyHandler,
 		MoneyRequests: moneyRequestHandler,
+		Funding:       fundingHandler,
 	})
 	if err := srv.Run(ctx); err != nil {
 		log.Error("server", "error", err)

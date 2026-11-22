@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Twofold Customer API
-  version: 0.3.0
+  version: 0.4.0
   summary: Customer-facing wallet API for Ethiopia (ETB minor units).
   description: |
     Every birr, recorded twice. Money fields are integer minor units
@@ -21,6 +21,8 @@ tags:
   - name: Transfers
   - name: History
   - name: Requests
+  - name: Top-ups
+  - name: Webhooks
   - name: KYC
 security: []
 paths:
@@ -636,6 +638,103 @@ paths:
         "404":
           $ref: "#/components/responses/Problem"
         "409":
+          $ref: "#/components/responses/Problem"
+
+  /v1/topups:
+    post:
+      tags: [Top-ups]
+      summary: Start a provider top-up (pending until webhook)
+      operationId: createTopUp
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TopUpCreateRequest"
+            example:
+              provider: telebirr
+              amount_minor: 10000
+              currency: ETB
+      responses:
+        "201":
+          description: Pending top-up with checkout reference
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TopUpCreateResult"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+        "502":
+          $ref: "#/components/responses/Problem"
+
+  /v1/topups/{id}:
+    get:
+      tags: [Top-ups]
+      summary: Get a top-up by id
+      operationId: getTopUp
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Top-up record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TopUp"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "403":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+
+  /webhooks/providers/{provider}:
+    post:
+      tags: [Webhooks]
+      summary: Inbound provider webhook (HMAC verified)
+      operationId: providerWebhook
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [telebirr, chapa, simulator]
+        - name: X-Twofold-Signature
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Stripe-style t=<unix>,v1=<hex> over timestamp.body
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProviderWebhookEvent"
+      responses:
+        "200":
+          description: Accepted (including duplicates)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookAck"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "422":
           $ref: "#/components/responses/Problem"
 
   /v1/kyc/submissions:
@@ -1433,3 +1532,143 @@ components:
         created_at:
           type: string
           format: date-time
+
+    TopUpCreateRequest:
+      type: object
+      required: [provider, amount_minor]
+      additionalProperties: false
+      properties:
+        provider:
+          type: string
+          enum: [telebirr, chapa, simulator]
+        amount_minor:
+          type: integer
+          format: int64
+          exclusiveMinimum: 0
+        currency:
+          type: string
+          default: ETB
+
+    TopUpCheckout:
+      type: object
+      required: [provider, provider_ref, status]
+      additionalProperties: false
+      properties:
+        provider:
+          type: string
+        provider_ref:
+          type: string
+        status:
+          type: string
+
+    TopUp:
+      type: object
+      required:
+        - id
+        - reference
+        - kind
+        - status
+        - amount_minor
+        - fee_minor
+        - currency
+        - to_wallet_id
+        - provider
+        - provider_ref
+        - provider_status
+        - created_at
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        reference:
+          type: string
+        kind:
+          type: string
+        status:
+          type: string
+        amount_minor:
+          type: integer
+          format: int64
+        fee_minor:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        to_wallet_id:
+          type: string
+          format: uuid
+        provider:
+          type: string
+        provider_ref:
+          type: string
+        provider_status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        idempotency_key:
+          type: string
+
+    TopUpCreateResult:
+      type: object
+      required: [top_up, checkout]
+      additionalProperties: false
+      properties:
+        top_up:
+          $ref: "#/components/schemas/TopUp"
+        checkout:
+          $ref: "#/components/schemas/TopUpCheckout"
+
+    ProviderWebhookEvent:
+      type: object
+      required:
+        - event_id
+        - provider
+        - provider_ref
+        - kind
+        - status
+        - amount_minor
+        - currency
+        - reference
+        - occurred_at
+      additionalProperties: false
+      properties:
+        event_id:
+          type: string
+        provider:
+          type: string
+        provider_ref:
+          type: string
+        kind:
+          type: string
+        status:
+          type: string
+          enum: [pending, succeeded, failed]
+        amount_minor:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        reference:
+          type: string
+        occurred_at:
+          type: string
+          format: date-time
+
+    WebhookAck:
+      type: object
+      required: [ok, duplicate]
+      additionalProperties: false
+      properties:
+        ok:
+          type: boolean
+        duplicate:
+          type: boolean
+        decision:
+          type: string
+        status:
+          type: string
