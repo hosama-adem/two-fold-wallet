@@ -237,11 +237,13 @@ func TestTopUpRejectsBadSignature(t *testing.T) {
 	}
 
 	var n int
-	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM webhook_events`).Scan(&n); err != nil {
+	if err := pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM webhook_events WHERE event_id = $1
+	`, evt.EventID).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	if n != 0 {
-		t.Fatalf("webhook_events=%d want 0 after bad signature", n)
+		t.Fatalf("forged event %s was stored (count=%d)", evt.EventID, n)
 	}
 }
 
