@@ -1,6 +1,6 @@
 -- +goose Up
 -- Saved cash-out destinations (FR-WDR-1). The full account/phone is AES-GCM
--- encrypted at rest; APIs only ever return identifier_masked.
+-- encrypted at rest. APIs only ever return identifier_masked.
 
 CREATE TABLE payout_destinations (
     id                      UUID PRIMARY KEY,
