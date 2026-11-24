@@ -29,6 +29,8 @@ type Config struct {
 	ProviderBaseURL    string
 	ProviderHMACSecret string
 	ProviderName       string
+	// PayoutEncryptionKey is 32 raw bytes or standard base64 of 32 bytes (AES-GCM).
+	PayoutEncryptionKey string
 }
 
 // Load reads configuration from the environment.
@@ -56,6 +58,7 @@ func Load() (Config, error) {
 		ProviderBaseURL:     getenv("PROVIDER_BASE_URL", "http://127.0.0.1:8091"),
 		ProviderHMACSecret:  getenv("SIMULATOR_HMAC_SECRET", getenv("PROVIDER_HMAC_SECRET", "dev-simulator-hmac-secret")),
 		ProviderName:        getenv("PROVIDER_NAME", "simulator"),
+		PayoutEncryptionKey: getenv("PAYOUT_ENCRYPTION_KEY", "twofold-dev-payout-key-32bytes!!"),
 	}
 
 	if cfg.DatabaseURL == "" {

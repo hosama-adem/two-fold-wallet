@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/hosama-adem/twofold/backend/internal/audit"
+	"github.com/hosama-adem/twofold/backend/internal/fee"
 	"github.com/hosama-adem/twofold/backend/internal/funding/fundingdb"
 	"github.com/hosama-adem/twofold/backend/internal/ledger"
 	"github.com/hosama-adem/twofold/backend/internal/ledger/ledgerdb"
@@ -53,17 +54,19 @@ const (
 	auditLateSuccess = "topup.late_success"
 )
 
-// Service owns top-up create/get, webhook apply, and stale polling.
+// Service owns top-ups, withdrawals, destinations, and provider webhooks.
 type Service struct {
-	pool   *pgxpool.Pool
-	rail   provider.Provider
-	audit  *audit.Recorder
-	log    *slog.Logger
-	now    func() time.Time
+	pool  *pgxpool.Pool
+	rail  provider.Provider
+	audit *audit.Recorder
+	fees  *fee.Service
+	box   *SecretBox
+	log   *slog.Logger
+	now   func() time.Time
 }
 
-// NewService builds a funding service. rail is the payment port (simulator today).
-func NewService(pool *pgxpool.Pool, rail provider.Provider, audits *audit.Recorder, log *slog.Logger) *Service {
+// NewService builds a funding service. box may be nil if withdrawals are disabled.
+func NewService(pool *pgxpool.Pool, rail provider.Provider, audits *audit.Recorder, box *SecretBox, log *slog.Logger) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -71,6 +74,8 @@ func NewService(pool *pgxpool.Pool, rail provider.Provider, audits *audit.Record
 		pool:  pool,
 		rail:  rail,
 		audit: audits,
+		fees:  fee.NewService(pool),
+		box:   box,
 		log:   log,
 		now:   time.Now,
 	}
@@ -227,15 +232,17 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (CreateResult, err
 	}
 
 	pay, err := tq.InsertProviderPayment(ctx, fundingdb.InsertProviderPaymentParams{
-		ID:            payID,
-		TransactionID: txID,
-		Provider:      providerName,
-		Direction:     directionCollection,
-		ProviderRef:   coll.ProviderRef,
-		Status:        payPending,
-		AmountMinor:   in.AmountMinor,
-		Currency:      currency,
-		Raw:           raw,
+		ID:               payID,
+		TransactionID:    txID,
+		Provider:         providerName,
+		Direction:        directionCollection,
+		ProviderRef:      coll.ProviderRef,
+		Status:           payPending,
+		AmountMinor:      in.AmountMinor,
+		Currency:         currency,
+		Raw:              raw,
+		DestinationID:    nil,
+		ReserveJournalID: nil,
 	})
 	if err != nil {
 		return CreateResult{}, err

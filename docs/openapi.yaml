@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Twofold Customer API
-  version: 0.4.0
+  version: 0.5.0
   summary: Customer-facing wallet API for Ethiopia (ETB minor units).
   description: |
     Every birr, recorded twice. Money fields are integer minor units
@@ -22,6 +22,8 @@ tags:
   - name: History
   - name: Requests
   - name: Top-ups
+  - name: Withdrawals
+  - name: Destinations
   - name: Webhooks
   - name: KYC
 security: []
@@ -694,6 +696,140 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TopUp"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "403":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+
+  /v1/payout-destinations:
+    get:
+      tags: [Destinations]
+      summary: List saved payout destinations
+      operationId: listPayoutDestinations
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Destination list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PayoutDestinationList"
+        "401":
+          $ref: "#/components/responses/Problem"
+    post:
+      tags: [Destinations]
+      summary: Save a payout destination (identifier encrypted at rest)
+      operationId: createPayoutDestination
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PayoutDestinationCreate"
+            example:
+              provider: telebirr
+              kind: mobile_money
+              label: My Telebirr
+              identifier: "+251911223344"
+      responses:
+        "201":
+          description: Destination saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PayoutDestination"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+
+  /v1/payout-destinations/{id}:
+    delete:
+      tags: [Destinations]
+      summary: Soft-delete a payout destination
+      operationId: deletePayoutDestination
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Deleted
+        "401":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+
+  /v1/withdrawals:
+    post:
+      tags: [Withdrawals]
+      summary: Cash out to a saved destination (PIN required)
+      operationId: createWithdrawal
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WithdrawalCreateRequest"
+            example:
+              destination_id: "018f0000-0000-7000-8000-000000000001"
+              amount_minor: 10000
+              currency: ETB
+              pin: "2468"
+              expected_fee_minor: 0
+      responses:
+        "201":
+          description: Withdrawal processing (funds in payouts_pending)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Withdrawal"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "403":
+          $ref: "#/components/responses/Problem"
+        "409":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+        "502":
+          $ref: "#/components/responses/Problem"
+
+  /v1/withdrawals/{id}:
+    get:
+      tags: [Withdrawals]
+      summary: Get a withdrawal by id
+      operationId: getWithdrawal
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Withdrawal record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Withdrawal"
         "401":
           $ref: "#/components/responses/Problem"
         "403":
@@ -1671,4 +1807,139 @@ components:
         decision:
           type: string
         status:
+          type: string
+
+    PayoutDestinationCreate:
+      type: object
+      required: [provider, kind, label, identifier]
+      additionalProperties: false
+      properties:
+        provider:
+          type: string
+          enum: [telebirr, chapa, simulator]
+        kind:
+          type: string
+          enum: [mobile_money, bank_account]
+        label:
+          type: string
+          minLength: 1
+          maxLength: 80
+        identifier:
+          type: string
+          minLength: 1
+          maxLength: 64
+
+    PayoutDestination:
+      type: object
+      required: [id, provider, kind, label, identifier_masked, created_at]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        provider:
+          type: string
+        kind:
+          type: string
+        label:
+          type: string
+        identifier_masked:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    PayoutDestinationList:
+      type: object
+      required: [items]
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/PayoutDestination"
+
+    WithdrawalCreateRequest:
+      type: object
+      required: [destination_id, amount_minor, pin, expected_fee_minor]
+      additionalProperties: false
+      properties:
+        destination_id:
+          type: string
+          format: uuid
+        amount_minor:
+          type: integer
+          format: int64
+          exclusiveMinimum: 0
+        currency:
+          type: string
+          default: ETB
+        pin:
+          type: string
+          pattern: "^[0-9]{4}$"
+        expected_fee_minor:
+          type: integer
+          format: int64
+          minimum: 0
+
+    Withdrawal:
+      type: object
+      required:
+        - id
+        - reference
+        - kind
+        - status
+        - amount_minor
+        - fee_minor
+        - currency
+        - from_wallet_id
+        - provider
+        - provider_ref
+        - provider_status
+        - destination_id
+        - destination_label
+        - identifier_masked
+        - created_at
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        reference:
+          type: string
+        kind:
+          type: string
+        status:
+          type: string
+        amount_minor:
+          type: integer
+          format: int64
+        fee_minor:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        from_wallet_id:
+          type: string
+          format: uuid
+        provider:
+          type: string
+        provider_ref:
+          type: string
+        provider_status:
+          type: string
+        destination_id:
+          type: string
+          format: uuid
+        destination_label:
+          type: string
+        identifier_masked:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        idempotency_key:
           type: string

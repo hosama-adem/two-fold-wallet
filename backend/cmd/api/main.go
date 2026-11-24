@@ -120,11 +120,16 @@ func run() int {
 		BaseURL:    cfg.ProviderBaseURL,
 		HMACSecret: cfg.ProviderHMACSecret,
 	})
+	box, boxErr := funding.NewSecretBox(cfg.PayoutEncryptionKey)
+	if boxErr != nil {
+		log.Warn("payout encryption disabled", "error", boxErr)
+	}
 	if railErr != nil {
 		log.Warn("provider client disabled", "error", railErr)
 	} else {
 		fundingHandler = funding.NewHandler(
-			funding.NewService(pool, rail, audits, log),
+			funding.NewService(pool, rail, audits, box, log),
+			pins,
 			authHandler.RequireAccess(),
 			idempotency.Middleware(idemStore, auth.UserIDFromContext),
 			auth.UserIDFromContext,
