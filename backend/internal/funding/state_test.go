@@ -41,3 +41,19 @@ func TestPlanTransitionHappyAndOutOfOrder(t *testing.T) {
 		})
 	}
 }
+
+func TestPlanWithdrawalTransition(t *testing.T) {
+	t.Parallel()
+	okSettle, ok := planWithdrawalTransition(statusProcessing, provider.StatusSucceeded)
+	if !ok || okSettle.decision != decisionSettlePayout || okSettle.to != statusCompleted {
+		t.Fatalf("settle=%+v ok=%v", okSettle, ok)
+	}
+	okRefund, ok := planWithdrawalTransition(statusProcessing, provider.StatusFailed)
+	if !ok || okRefund.decision != decisionRefundPayout || okRefund.to != statusFailed {
+		t.Fatalf("refund=%+v ok=%v", okRefund, ok)
+	}
+	ignore, ok := planWithdrawalTransition(statusCompleted, provider.StatusFailed)
+	if !ok || ignore.decision != decisionIgnore {
+		t.Fatalf("completed ignore=%+v", ignore)
+	}
+}
