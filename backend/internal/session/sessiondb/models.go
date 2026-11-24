@@ -108,6 +108,19 @@ type OtpCode struct {
 	CreatedAt  time.Time  `json:"created_at"`
 }
 
+type PayoutDestination struct {
+	ID                   uuid.UUID  `json:"id"`
+	UserID               uuid.UUID  `json:"user_id"`
+	Provider             string     `json:"provider"`
+	Kind                 string     `json:"kind"`
+	Label                string     `json:"label"`
+	IdentifierCiphertext []byte     `json:"identifier_ciphertext"`
+	IdentifierNonce      []byte     `json:"identifier_nonce"`
+	IdentifierMasked     string     `json:"identifier_masked"`
+	CreatedAt            time.Time  `json:"created_at"`
+	DeletedAt            *time.Time `json:"deleted_at"`
+}
+
 type Posting struct {
 	ID                uuid.UUID `json:"id"`
 	JournalID         uuid.UUID `json:"journal_id"`
@@ -121,17 +134,19 @@ type Posting struct {
 }
 
 type ProviderPayment struct {
-	ID            uuid.UUID `json:"id"`
-	TransactionID uuid.UUID `json:"transaction_id"`
-	Provider      string    `json:"provider"`
-	Direction     string    `json:"direction"`
-	ProviderRef   string    `json:"provider_ref"`
-	Status        string    `json:"status"`
-	AmountMinor   int64     `json:"amount_minor"`
-	Currency      string    `json:"currency"`
-	Raw           []byte    `json:"raw"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID               uuid.UUID  `json:"id"`
+	TransactionID    uuid.UUID  `json:"transaction_id"`
+	Provider         string     `json:"provider"`
+	Direction        string     `json:"direction"`
+	ProviderRef      string     `json:"provider_ref"`
+	Status           string     `json:"status"`
+	AmountMinor      int64      `json:"amount_minor"`
+	Currency         string     `json:"currency"`
+	Raw              []byte     `json:"raw"`
+	DestinationID    *uuid.UUID `json:"destination_id"`
+	ReserveJournalID *uuid.UUID `json:"reserve_journal_id"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
 type Session struct {
