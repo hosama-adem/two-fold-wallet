@@ -133,7 +133,21 @@ func (s *Service) applyStatus(ctx context.Context, in applyInput) (WebhookResult
 		return WebhookResult{}, err
 	}
 
-	plan, ok := planTransition(txn.Status, in.Status)
+	var (
+		plan transition
+		ok   bool
+	)
+	switch txn.Kind {
+	case kindTopUp:
+		plan, ok = planTopUpTransition(txn.Status, in.Status)
+	case kindCashOut:
+		plan, ok = planWithdrawalTransition(txn.Status, in.Status)
+	default:
+		if err := tx.Commit(ctx); err != nil {
+			return WebhookResult{}, err
+		}
+		return WebhookResult{Decision: decisionIgnore, Status: txn.Status}, nil
+	}
 	if !ok {
 		if err := tx.Commit(ctx); err != nil {
 			return WebhookResult{}, err
@@ -173,6 +187,14 @@ func (s *Service) applyStatus(ctx context.Context, in applyInput) (WebhookResult
 		}
 	case decisionMarkFailed:
 		// status-only; no journal
+	case decisionSettlePayout:
+		if err := s.settlePayout(ctx, tx, txn, pay, amount, currency); err != nil {
+			return WebhookResult{}, err
+		}
+	case decisionRefundPayout:
+		if err := s.refundPayout(ctx, tx, txn, pay); err != nil {
+			return WebhookResult{}, err
+		}
 	default:
 		return WebhookResult{}, fmt.Errorf("funding: unknown decision %s", plan.decision)
 	}
@@ -338,6 +360,55 @@ func (s *Service) creditSuspense(
 		"reason", reason,
 	)
 	_ = q // payment row updated by caller
+	return nil
+}
+
+func (s *Service) settlePayout(
+	ctx context.Context,
+	tx pgx.Tx,
+	txn fundingdb.Transaction,
+	pay fundingdb.ProviderPayment,
+	amount int64,
+	currency string,
+) error {
+	pendingID, err := s.systemAccountID(ctx, tx, ledger.CodePayoutsPending)
+	if err != nil {
+		return err
+	}
+	code, err := clearingCode(pay.Provider)
+	if err != nil {
+		return err
+	}
+	clearingID, err := s.systemAccountID(ctx, tx, code)
+	if err != nil {
+		return err
+	}
+	journal, err := buildCashOutSettleJournal(pendingID, clearingID, amount, currency)
+	if err != nil {
+		return err
+	}
+	journal = journal.WithTransactionID(txn.ID).WithDescription("Cash-out settle " + txn.Reference)
+	if _, err := ledger.Post(ctx, tx, journal); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Service) refundPayout(
+	ctx context.Context,
+	tx pgx.Tx,
+	txn fundingdb.Transaction,
+	pay fundingdb.ProviderPayment,
+) error {
+	if pay.ReserveJournalID == nil || *pay.ReserveJournalID == uuid.Nil {
+		return fmt.Errorf("funding: missing reserve journal for payout refund")
+	}
+	if _, err := ledger.Reverse(ctx, tx, *pay.ReserveJournalID, "payout_failed_refund "+txn.Reference); err != nil {
+		if errors.Is(err, ledger.ErrAlreadyReversed) {
+			return nil
+		}
+		return err
+	}
 	return nil
 }
 

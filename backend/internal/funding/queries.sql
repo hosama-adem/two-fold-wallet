@@ -79,11 +79,42 @@ SELECT EXISTS(
 -- name: InsertProviderPayment :one
 INSERT INTO provider_payments (
     id, transaction_id, provider, direction, provider_ref, status,
-    amount_minor, currency, raw
+    amount_minor, currency, raw, destination_id, reserve_journal_id
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
 )
 RETURNING *;
+
+-- name: InsertPayoutDestination :one
+INSERT INTO payout_destinations (
+    id, user_id, provider, kind, label,
+    identifier_ciphertext, identifier_nonce, identifier_masked
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8
+)
+RETURNING *;
+
+-- name: ListPayoutDestinations :many
+SELECT * FROM payout_destinations
+WHERE user_id = $1 AND deleted_at IS NULL
+ORDER BY created_at DESC, id DESC;
+
+-- name: GetPayoutDestination :one
+SELECT * FROM payout_destinations
+WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL;
+
+-- name: GetPayoutDestinationIncludingDeleted :one
+SELECT * FROM payout_destinations
+WHERE id = $1 AND user_id = $2;
+
+-- name: SoftDeletePayoutDestination :one
+UPDATE payout_destinations
+SET deleted_at = now()
+WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
+RETURNING *;
+
+-- name: GetAvailableBalance :one
+SELECT available_minor FROM wallet_balances WHERE wallet_id = $1;
 
 -- name: GetProviderPaymentByRef :one
 SELECT * FROM provider_payments

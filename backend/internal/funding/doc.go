@@ -1,8 +1,11 @@
-// Package funding owns top-up (and later withdrawal) lifecycles.
+// Package funding owns top-up and withdrawal lifecycles.
 //
-// Day 23: POST /v1/topups creates a pending top_up + provider_payments row and
-// returns checkout info. Money is credited only when POST
-// /webhooks/providers/{provider} verifies HMAC, dedupes on (provider, event_id),
-// and posts Dr provider_clearing / Cr wallet. Late success after failure goes
-// to suspense with an audit alert. PollStale is the Day-25 worker hook.
+// Day 23: top-ups stay pending until a signed collection webhook credits the
+// wallet (clearing → wallet). Duplicates are no-ops; late success after failure
+// parks money in suspense.
+//
+// Day 24: saved payout destinations store AES-GCM ciphertext. Withdrawals
+// reserve funds immediately (wallet → payouts_pending), then a payout webhook
+// either settles (payouts_pending → clearing) or refunds via ledger.Reverse.
+// transaction_events carry notify_ready reasons for Day 25/26.
 package funding

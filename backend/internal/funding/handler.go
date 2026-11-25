@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"github.com/hosama-adem/twofold/backend/internal/pin"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpx"
 	"github.com/hosama-adem/twofold/backend/internal/wallet"
 )
@@ -15,9 +16,10 @@ import (
 // CurrentUser reads the authenticated user id set by access-token middleware.
 type CurrentUser func(c *gin.Context) (uuid.UUID, bool)
 
-// Handler serves /v1/topups and /webhooks/providers/{provider}.
+// Handler serves top-ups, withdrawals, destinations, and provider webhooks.
 type Handler struct {
 	svc         *Service
+	pins        *pin.Service
 	require     gin.HandlerFunc
 	idempotent  gin.HandlerFunc
 	currentUser CurrentUser
@@ -26,38 +28,63 @@ type Handler struct {
 // NewHandler builds the funding HTTP adapter.
 func NewHandler(
 	svc *Service,
+	pins *pin.Service,
 	require gin.HandlerFunc,
 	idempotent gin.HandlerFunc,
 	currentUser CurrentUser,
 ) *Handler {
 	return &Handler{
 		svc:         svc,
+		pins:        pins,
 		require:     require,
 		idempotent:  idempotent,
 		currentUser: currentUser,
 	}
 }
 
-type createBody struct {
+type createTopUpBody struct {
 	Provider    string `json:"provider"`
 	AmountMinor int64  `json:"amount_minor"`
 	Currency    string `json:"currency"`
 }
 
-// Mount registers customer top-up routes and the public provider webhook.
+type createDestinationBody struct {
+	Provider   string `json:"provider"`
+	Kind       string `json:"kind"`
+	Label      string `json:"label"`
+	Identifier string `json:"identifier"`
+}
+
+type createWithdrawalBody struct {
+	DestinationID    string `json:"destination_id"`
+	AmountMinor      int64  `json:"amount_minor"`
+	Currency         string `json:"currency"`
+	PIN              string `json:"pin"`
+	ExpectedFeeMinor int64  `json:"expected_fee_minor"`
+}
+
+// Mount registers funding routes.
 func (h *Handler) Mount(e *gin.Engine) {
-	e.POST("/v1/topups", h.require, h.idempotent, h.Create)
-	e.GET("/v1/topups/:id", h.require, h.Get)
+	e.POST("/v1/topups", h.require, h.idempotent, h.CreateTopUp)
+	e.GET("/v1/topups/:id", h.require, h.GetTopUp)
+
+	e.POST("/v1/payout-destinations", h.require, h.CreateDestination)
+	e.GET("/v1/payout-destinations", h.require, h.ListDestinations)
+	e.DELETE("/v1/payout-destinations/:id", h.require, h.DeleteDestination)
+
+	e.POST("/v1/withdrawals", h.require, h.idempotent, h.CreateWithdrawal)
+	e.GET("/v1/withdrawals/:id", h.require, h.GetWithdrawal)
+
 	e.POST("/webhooks/providers/:provider", h.Webhook)
 }
 
-// Create handles POST /v1/topups.
-func (h *Handler) Create(c *gin.Context) {
+// CreateTopUp handles POST /v1/topups.
+func (h *Handler) CreateTopUp(c *gin.Context) {
 	userID, ok := h.caller(c)
 	if !ok {
 		return
 	}
-	var body createBody
+	var body createTopUpBody
 	if err := httpx.BindJSON(c, &body); err != nil {
 		httpx.WriteError(c, err)
 		return
@@ -82,8 +109,8 @@ func (h *Handler) Create(c *gin.Context) {
 	c.JSON(http.StatusCreated, out)
 }
 
-// Get handles GET /v1/topups/{id}.
-func (h *Handler) Get(c *gin.Context) {
+// GetTopUp handles GET /v1/topups/{id}.
+func (h *Handler) GetTopUp(c *gin.Context) {
 	userID, ok := h.caller(c)
 	if !ok {
 		return
@@ -94,6 +121,133 @@ func (h *Handler) Get(c *gin.Context) {
 		return
 	}
 	out, err := h.svc.Get(c.Request.Context(), userID, id)
+	if err != nil {
+		httpx.WriteError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+// CreateDestination handles POST /v1/payout-destinations.
+func (h *Handler) CreateDestination(c *gin.Context) {
+	userID, ok := h.caller(c)
+	if !ok {
+		return
+	}
+	var body createDestinationBody
+	if err := httpx.BindJSON(c, &body); err != nil {
+		httpx.WriteError(c, err)
+		return
+	}
+	out, err := h.svc.CreateDestination(c.Request.Context(), DestinationInput{
+		UserID:     userID,
+		Provider:   strings.TrimSpace(body.Provider),
+		Kind:       strings.TrimSpace(body.Kind),
+		Label:      strings.TrimSpace(body.Label),
+		Identifier: strings.TrimSpace(body.Identifier),
+	})
+	if err != nil {
+		httpx.WriteError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, out)
+}
+
+// ListDestinations handles GET /v1/payout-destinations.
+func (h *Handler) ListDestinations(c *gin.Context) {
+	userID, ok := h.caller(c)
+	if !ok {
+		return
+	}
+	items, err := h.svc.ListDestinations(c.Request.Context(), userID)
+	if err != nil {
+		httpx.WriteError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items})
+}
+
+// DeleteDestination handles DELETE /v1/payout-destinations/{id}.
+func (h *Handler) DeleteDestination(c *gin.Context) {
+	userID, ok := h.caller(c)
+	if !ok {
+		return
+	}
+	id, err := uuid.Parse(strings.TrimSpace(c.Param("id")))
+	if err != nil {
+		httpx.WriteError(c, httpx.ValidationFailed("Destination id must be a UUID."))
+		return
+	}
+	if err := h.svc.DeleteDestination(c.Request.Context(), userID, id); err != nil {
+		httpx.WriteError(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+// CreateWithdrawal handles POST /v1/withdrawals.
+func (h *Handler) CreateWithdrawal(c *gin.Context) {
+	userID, ok := h.caller(c)
+	if !ok {
+		return
+	}
+	var body createWithdrawalBody
+	if err := httpx.BindJSON(c, &body); err != nil {
+		httpx.WriteError(c, err)
+		return
+	}
+	if strings.TrimSpace(body.PIN) == "" {
+		httpx.WriteError(c, httpx.ValidationFailed("Transaction PIN is required."))
+		return
+	}
+	if h.pins == nil {
+		httpx.WriteError(c, httpx.Internal("PIN verifier is not configured."))
+		return
+	}
+	if err := h.pins.Verify(c.Request.Context(), userID, body.PIN, pin.Meta{
+		UserAgent: c.Request.UserAgent(),
+		IP:        c.ClientIP(),
+		RequestID: httpx.RequestIDFromContext(c),
+	}); err != nil {
+		httpx.WriteError(c, err)
+		return
+	}
+	destID, err := uuid.Parse(strings.TrimSpace(body.DestinationID))
+	if err != nil {
+		httpx.WriteError(c, httpx.ValidationFailed("Destination id must be a UUID."))
+		return
+	}
+	currency := strings.TrimSpace(body.Currency)
+	if currency == "" {
+		currency = wallet.CurrencyETB
+	}
+	out, err := h.svc.Withdraw(c.Request.Context(), WithdrawInput{
+		UserID:           userID,
+		DestinationID:    destID,
+		AmountMinor:      body.AmountMinor,
+		Currency:         currency,
+		ExpectedFeeMinor: body.ExpectedFeeMinor,
+		IdempotencyKey:   strings.TrimSpace(c.GetHeader("Idempotency-Key")),
+	})
+	if err != nil {
+		httpx.WriteError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, out)
+}
+
+// GetWithdrawal handles GET /v1/withdrawals/{id}.
+func (h *Handler) GetWithdrawal(c *gin.Context) {
+	userID, ok := h.caller(c)
+	if !ok {
+		return
+	}
+	id, err := uuid.Parse(strings.TrimSpace(c.Param("id")))
+	if err != nil {
+		httpx.WriteError(c, httpx.ValidationFailed("Withdrawal id must be a UUID."))
+		return
+	}
+	out, err := h.svc.GetWithdrawal(c.Request.Context(), userID, id)
 	if err != nil {
 		httpx.WriteError(c, err)
 		return

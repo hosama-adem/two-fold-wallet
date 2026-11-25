@@ -53,8 +53,25 @@ func (f *fakeRail) InitiateCollection(_ context.Context, req provider.Collection
 	}, nil
 }
 
-func (f *fakeRail) InitiatePayout(context.Context, provider.PayoutRequest) (provider.PayoutRef, error) {
-	return provider.PayoutRef{}, nil
+func (f *fakeRail) InitiatePayout(_ context.Context, req provider.PayoutRequest) (provider.PayoutRef, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ref := "fake_pay_" + uuid.NewString()
+	st := provider.PaymentStatus{
+		ProviderRef: ref,
+		Kind:        "payout",
+		Status:      provider.StatusPending,
+		AmountMinor: req.AmountMinor,
+		Currency:    req.Currency,
+		Reference:   req.Reference,
+		UpdatedAt:   f.now().UTC(),
+	}
+	f.byRef[ref] = st
+	return provider.PayoutRef{
+		ProviderRef: ref,
+		Status:      provider.StatusPending,
+		CreatedAt:   f.now().UTC(),
+	}, nil
 }
 
 func (f *fakeRail) GetStatus(_ context.Context, ref string) (provider.PaymentStatus, error) {

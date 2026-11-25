@@ -266,9 +266,14 @@ func newFundingServer(t *testing.T, pool *pgxpool.Pool, sms auth.SMSSender, rail
 	})
 	authHandler := auth.NewHandler(authSvc, nil)
 	idemStore := idempotency.NewStore(pool)
-	svc := funding.NewService(pool, rail, audits, log)
+	box, err := funding.NewSecretBox("twofold-dev-payout-key-32bytes!!")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := funding.NewService(pool, rail, audits, box, log)
 	fundingHandler := funding.NewHandler(
 		svc,
+		pins,
 		authHandler.RequireAccess(),
 		idempotency.Middleware(idemStore, auth.UserIDFromContext),
 		auth.UserIDFromContext,
@@ -455,4 +460,198 @@ func loadPEM(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+const testPIN = "2468"
+
+func TestWithdrawalFailedPayoutRestoresAvailableBalance(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration")
+	}
+	pool := testutil.Postgres(t)
+	rail := newFakeRail(hmacSecret)
+	sms := &auth.RecordingSMSSender{}
+	srv, _ := newFundingServer(t, pool, sms, rail)
+	ctx := context.Background()
+
+	phone := uniquePhone()
+	registerVerifyPIN(t, srv, sms, phone, "Abel Cashout")
+	if _, err := pool.Exec(ctx, `UPDATE users SET kyc_tier = 1 WHERE phone_e164 = $1`, phone); err != nil {
+		t.Fatal(err)
+	}
+	token := login(t, srv, phone)
+	accountID, walletID := walletIDs(t, ctx, pool, phone)
+	fundWallet(t, ctx, pool, accountID, 50_000)
+
+	before := availableOf(t, ctx, pool, walletID)
+	dest := createDestination(t, srv, token, phone)
+
+	wd := createWithdrawal(t, srv, token, dest.ID, 10_000, 0)
+	if wd.Status != "processing" {
+		t.Fatalf("status=%q want processing", wd.Status)
+	}
+	mid := availableOf(t, ctx, pool, walletID)
+	if mid >= before {
+		t.Fatalf("available should drop after reserve: before=%d mid=%d", before, mid)
+	}
+
+	evt := provider.WebhookEvent{
+		EventID:     "evt_pay_fail_" + uuid.NewString(),
+		Provider:    wd.Provider,
+		ProviderRef: wd.ProviderRef,
+		Kind:        "payout",
+		Status:      provider.StatusFailed,
+		AmountMinor: wd.AmountMinor,
+		Currency:    wd.Currency,
+		Reference:   wd.Reference,
+		OccurredAt:  time.Now().UTC(),
+	}
+	body, _ := json.Marshal(evt)
+	if rec := postWebhook(t, srv, "telebirr", body, time.Now()); rec.Code != http.StatusOK {
+		t.Fatalf("fail webhook=%d %s", rec.Code, rec.Body.String())
+	}
+
+	got := getWithdrawal(t, srv, token, wd.ID)
+	if got.Status != "failed" {
+		t.Fatalf("status=%q want failed", got.Status)
+	}
+	after := availableOf(t, ctx, pool, walletID)
+	if after != before {
+		t.Fatalf("available after refund=%d want %d (exact restore)", after, before)
+	}
+}
+
+func registerVerifyPIN(t *testing.T, srv *httpserver.Server, sms *auth.RecordingSMSSender, phone, name string) {
+	t.Helper()
+	registerVerify(t, srv, sms, phone, name)
+	tok := login(t, srv, phone)
+	rec := putJSON(t, srv, "/v1/me/pin", tok, map[string]string{
+		"password": "correct-horse-1", "pin": testPIN,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("set pin=%d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func putJSON(t *testing.T, srv *httpserver.Server, path, bearer string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPut, path, bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	rec := httptest.NewRecorder()
+	srv.Engine().ServeHTTP(rec, req)
+	return rec
+}
+
+func fundWallet(t *testing.T, ctx context.Context, pool *pgxpool.Pool, walletAccount uuid.UUID, amount int64) {
+	t.Helper()
+	clearing, err := ledgerdb.New(pool).GetAccountByCode(ctx, ledger.CodeProviderClearingTelebirr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	money, err := ledger.NewMoney(amount, ledger.CurrencyETB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	debit, err := ledger.NewLine(clearing.ID, ledger.Debit, money)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credit, err := ledger.NewLine(walletAccount, ledger.Credit, money)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := ledger.NewJournal(ledger.KindTopUp, []ledger.Line{debit, credit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := ledger.Post(ctx, tx, journal); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func availableOf(t *testing.T, ctx context.Context, pool *pgxpool.Pool, walletID uuid.UUID) int64 {
+	t.Helper()
+	var avail int64
+	if err := pool.QueryRow(ctx, `SELECT available_minor FROM wallet_balances WHERE wallet_id = $1`, walletID).Scan(&avail); err != nil {
+		t.Fatal(err)
+	}
+	return avail
+}
+
+type destResponse struct {
+	ID uuid.UUID `json:"id"`
+}
+
+func createDestination(t *testing.T, srv *httpserver.Server, token, phone string) destResponse {
+	t.Helper()
+	rec := postJSON(t, srv, "/v1/payout-destinations", token, map[string]any{
+		"provider":   "telebirr",
+		"kind":       "mobile_money",
+		"label":      "My Telebirr",
+		"identifier": phone,
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create destination=%d %s", rec.Code, rec.Body.String())
+	}
+	var out destResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func createWithdrawal(t *testing.T, srv *httpserver.Server, token string, destID uuid.UUID, amount, expectedFee int64) funding.Withdrawal {
+	t.Helper()
+	b, _ := json.Marshal(map[string]any{
+		"destination_id":     destID.String(),
+		"amount_minor":       amount,
+		"currency":           "ETB",
+		"pin":                testPIN,
+		"expected_fee_minor": expectedFee,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/withdrawals", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Idempotency-Key", uuid.NewString())
+	rec := httptest.NewRecorder()
+	srv.Engine().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create withdrawal=%d %s", rec.Code, rec.Body.String())
+	}
+	var out funding.Withdrawal
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func getWithdrawal(t *testing.T, srv *httpserver.Server, token string, id uuid.UUID) funding.Withdrawal {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/v1/withdrawals/"+id.String(), nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	srv.Engine().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get withdrawal=%d %s", rec.Code, rec.Body.String())
+	}
+	var out funding.Withdrawal
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }

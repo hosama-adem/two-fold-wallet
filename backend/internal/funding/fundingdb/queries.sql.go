@@ -13,8 +13,75 @@ import (
 	"github.com/google/uuid"
 )
 
+const getAvailableBalance = `-- name: GetAvailableBalance :one
+SELECT available_minor FROM wallet_balances WHERE wallet_id = $1
+`
+
+func (q *Queries) GetAvailableBalance(ctx context.Context, walletID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, getAvailableBalance, walletID)
+	var available_minor int64
+	err := row.Scan(&available_minor)
+	return available_minor, err
+}
+
+const getPayoutDestination = `-- name: GetPayoutDestination :one
+SELECT id, user_id, provider, kind, label, identifier_ciphertext, identifier_nonce, identifier_masked, created_at, deleted_at FROM payout_destinations
+WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
+`
+
+type GetPayoutDestinationParams struct {
+	ID     uuid.UUID `json:"id"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+func (q *Queries) GetPayoutDestination(ctx context.Context, arg GetPayoutDestinationParams) (PayoutDestination, error) {
+	row := q.db.QueryRow(ctx, getPayoutDestination, arg.ID, arg.UserID)
+	var i PayoutDestination
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Provider,
+		&i.Kind,
+		&i.Label,
+		&i.IdentifierCiphertext,
+		&i.IdentifierNonce,
+		&i.IdentifierMasked,
+		&i.CreatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const getPayoutDestinationIncludingDeleted = `-- name: GetPayoutDestinationIncludingDeleted :one
+SELECT id, user_id, provider, kind, label, identifier_ciphertext, identifier_nonce, identifier_masked, created_at, deleted_at FROM payout_destinations
+WHERE id = $1 AND user_id = $2
+`
+
+type GetPayoutDestinationIncludingDeletedParams struct {
+	ID     uuid.UUID `json:"id"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+func (q *Queries) GetPayoutDestinationIncludingDeleted(ctx context.Context, arg GetPayoutDestinationIncludingDeletedParams) (PayoutDestination, error) {
+	row := q.db.QueryRow(ctx, getPayoutDestinationIncludingDeleted, arg.ID, arg.UserID)
+	var i PayoutDestination
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Provider,
+		&i.Kind,
+		&i.Label,
+		&i.IdentifierCiphertext,
+		&i.IdentifierNonce,
+		&i.IdentifierMasked,
+		&i.CreatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const getProviderPaymentByRef = `-- name: GetProviderPaymentByRef :one
-SELECT id, transaction_id, provider, direction, provider_ref, status, amount_minor, currency, raw, created_at, updated_at FROM provider_payments
+SELECT id, transaction_id, provider, direction, provider_ref, status, amount_minor, currency, raw, destination_id, reserve_journal_id, created_at, updated_at FROM provider_payments
 WHERE provider_ref = $1
 ORDER BY created_at ASC
 LIMIT 1
@@ -33,6 +100,8 @@ func (q *Queries) GetProviderPaymentByRef(ctx context.Context, providerRef strin
 		&i.AmountMinor,
 		&i.Currency,
 		&i.Raw,
+		&i.DestinationID,
+		&i.ReserveJournalID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -40,7 +109,7 @@ func (q *Queries) GetProviderPaymentByRef(ctx context.Context, providerRef strin
 }
 
 const getProviderPaymentByTxn = `-- name: GetProviderPaymentByTxn :one
-SELECT id, transaction_id, provider, direction, provider_ref, status, amount_minor, currency, raw, created_at, updated_at FROM provider_payments
+SELECT id, transaction_id, provider, direction, provider_ref, status, amount_minor, currency, raw, destination_id, reserve_journal_id, created_at, updated_at FROM provider_payments
 WHERE transaction_id = $1
 `
 
@@ -57,6 +126,8 @@ func (q *Queries) GetProviderPaymentByTxn(ctx context.Context, transactionID uui
 		&i.AmountMinor,
 		&i.Currency,
 		&i.Raw,
+		&i.DestinationID,
+		&i.ReserveJournalID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -154,26 +225,76 @@ func (q *Queries) GetWalletByUserCurrency(ctx context.Context, arg GetWalletByUs
 	return i, err
 }
 
+const insertPayoutDestination = `-- name: InsertPayoutDestination :one
+INSERT INTO payout_destinations (
+    id, user_id, provider, kind, label,
+    identifier_ciphertext, identifier_nonce, identifier_masked
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8
+)
+RETURNING id, user_id, provider, kind, label, identifier_ciphertext, identifier_nonce, identifier_masked, created_at, deleted_at
+`
+
+type InsertPayoutDestinationParams struct {
+	ID                   uuid.UUID `json:"id"`
+	UserID               uuid.UUID `json:"user_id"`
+	Provider             string    `json:"provider"`
+	Kind                 string    `json:"kind"`
+	Label                string    `json:"label"`
+	IdentifierCiphertext []byte    `json:"identifier_ciphertext"`
+	IdentifierNonce      []byte    `json:"identifier_nonce"`
+	IdentifierMasked     string    `json:"identifier_masked"`
+}
+
+func (q *Queries) InsertPayoutDestination(ctx context.Context, arg InsertPayoutDestinationParams) (PayoutDestination, error) {
+	row := q.db.QueryRow(ctx, insertPayoutDestination,
+		arg.ID,
+		arg.UserID,
+		arg.Provider,
+		arg.Kind,
+		arg.Label,
+		arg.IdentifierCiphertext,
+		arg.IdentifierNonce,
+		arg.IdentifierMasked,
+	)
+	var i PayoutDestination
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Provider,
+		&i.Kind,
+		&i.Label,
+		&i.IdentifierCiphertext,
+		&i.IdentifierNonce,
+		&i.IdentifierMasked,
+		&i.CreatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const insertProviderPayment = `-- name: InsertProviderPayment :one
 INSERT INTO provider_payments (
     id, transaction_id, provider, direction, provider_ref, status,
-    amount_minor, currency, raw
+    amount_minor, currency, raw, destination_id, reserve_journal_id
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
 )
-RETURNING id, transaction_id, provider, direction, provider_ref, status, amount_minor, currency, raw, created_at, updated_at
+RETURNING id, transaction_id, provider, direction, provider_ref, status, amount_minor, currency, raw, destination_id, reserve_journal_id, created_at, updated_at
 `
 
 type InsertProviderPaymentParams struct {
-	ID            uuid.UUID       `json:"id"`
-	TransactionID uuid.UUID       `json:"transaction_id"`
-	Provider      string          `json:"provider"`
-	Direction     string          `json:"direction"`
-	ProviderRef   string          `json:"provider_ref"`
-	Status        string          `json:"status"`
-	AmountMinor   int64           `json:"amount_minor"`
-	Currency      string          `json:"currency"`
-	Raw           json.RawMessage `json:"raw"`
+	ID               uuid.UUID       `json:"id"`
+	TransactionID    uuid.UUID       `json:"transaction_id"`
+	Provider         string          `json:"provider"`
+	Direction        string          `json:"direction"`
+	ProviderRef      string          `json:"provider_ref"`
+	Status           string          `json:"status"`
+	AmountMinor      int64           `json:"amount_minor"`
+	Currency         string          `json:"currency"`
+	Raw              json.RawMessage `json:"raw"`
+	DestinationID    *uuid.UUID      `json:"destination_id"`
+	ReserveJournalID *uuid.UUID      `json:"reserve_journal_id"`
 }
 
 func (q *Queries) InsertProviderPayment(ctx context.Context, arg InsertProviderPaymentParams) (ProviderPayment, error) {
@@ -187,6 +308,8 @@ func (q *Queries) InsertProviderPayment(ctx context.Context, arg InsertProviderP
 		arg.AmountMinor,
 		arg.Currency,
 		arg.Raw,
+		arg.DestinationID,
+		arg.ReserveJournalID,
 	)
 	var i ProviderPayment
 	err := row.Scan(
@@ -199,6 +322,8 @@ func (q *Queries) InsertProviderPayment(ctx context.Context, arg InsertProviderP
 		&i.AmountMinor,
 		&i.Currency,
 		&i.Raw,
+		&i.DestinationID,
+		&i.ReserveJournalID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -341,8 +466,45 @@ func (q *Queries) InsertWebhookEvent(ctx context.Context, arg InsertWebhookEvent
 	return result.RowsAffected(), nil
 }
 
+const listPayoutDestinations = `-- name: ListPayoutDestinations :many
+SELECT id, user_id, provider, kind, label, identifier_ciphertext, identifier_nonce, identifier_masked, created_at, deleted_at FROM payout_destinations
+WHERE user_id = $1 AND deleted_at IS NULL
+ORDER BY created_at DESC, id DESC
+`
+
+func (q *Queries) ListPayoutDestinations(ctx context.Context, userID uuid.UUID) ([]PayoutDestination, error) {
+	rows, err := q.db.Query(ctx, listPayoutDestinations, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PayoutDestination{}
+	for rows.Next() {
+		var i PayoutDestination
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.Provider,
+			&i.Kind,
+			&i.Label,
+			&i.IdentifierCiphertext,
+			&i.IdentifierNonce,
+			&i.IdentifierMasked,
+			&i.CreatedAt,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listStalePendingTopups = `-- name: ListStalePendingTopups :many
-SELECT pp.id, pp.transaction_id, pp.provider, pp.direction, pp.provider_ref, pp.status, pp.amount_minor, pp.currency, pp.raw, pp.created_at, pp.updated_at
+SELECT pp.id, pp.transaction_id, pp.provider, pp.direction, pp.provider_ref, pp.status, pp.amount_minor, pp.currency, pp.raw, pp.destination_id, pp.reserve_journal_id, pp.created_at, pp.updated_at
 FROM provider_payments pp
 JOIN transactions t ON t.id = pp.transaction_id
 WHERE pp.direction = 'collection'
@@ -378,6 +540,8 @@ func (q *Queries) ListStalePendingTopups(ctx context.Context, arg ListStalePendi
 			&i.AmountMinor,
 			&i.Currency,
 			&i.Raw,
+			&i.DestinationID,
+			&i.ReserveJournalID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -392,7 +556,7 @@ func (q *Queries) ListStalePendingTopups(ctx context.Context, arg ListStalePendi
 }
 
 const lockProviderPaymentByRef = `-- name: LockProviderPaymentByRef :one
-SELECT id, transaction_id, provider, direction, provider_ref, status, amount_minor, currency, raw, created_at, updated_at FROM provider_payments
+SELECT id, transaction_id, provider, direction, provider_ref, status, amount_minor, currency, raw, destination_id, reserve_journal_id, created_at, updated_at FROM provider_payments
 WHERE provider_ref = $1
 ORDER BY created_at ASC
 LIMIT 1
@@ -412,6 +576,8 @@ func (q *Queries) LockProviderPaymentByRef(ctx context.Context, providerRef stri
 		&i.AmountMinor,
 		&i.Currency,
 		&i.Raw,
+		&i.DestinationID,
+		&i.ReserveJournalID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -481,6 +647,36 @@ func (q *Queries) ReferenceExists(ctx context.Context, reference string) (bool, 
 	return present, err
 }
 
+const softDeletePayoutDestination = `-- name: SoftDeletePayoutDestination :one
+UPDATE payout_destinations
+SET deleted_at = now()
+WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
+RETURNING id, user_id, provider, kind, label, identifier_ciphertext, identifier_nonce, identifier_masked, created_at, deleted_at
+`
+
+type SoftDeletePayoutDestinationParams struct {
+	ID     uuid.UUID `json:"id"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+func (q *Queries) SoftDeletePayoutDestination(ctx context.Context, arg SoftDeletePayoutDestinationParams) (PayoutDestination, error) {
+	row := q.db.QueryRow(ctx, softDeletePayoutDestination, arg.ID, arg.UserID)
+	var i PayoutDestination
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Provider,
+		&i.Kind,
+		&i.Label,
+		&i.IdentifierCiphertext,
+		&i.IdentifierNonce,
+		&i.IdentifierMasked,
+		&i.CreatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const transitionTransaction = `-- name: TransitionTransaction :one
 UPDATE transactions
 SET status = $1,
@@ -529,7 +725,7 @@ SET status = $1,
     updated_at = now()
 WHERE id = $3
   AND status = $4
-RETURNING id, transaction_id, provider, direction, provider_ref, status, amount_minor, currency, raw, created_at, updated_at
+RETURNING id, transaction_id, provider, direction, provider_ref, status, amount_minor, currency, raw, destination_id, reserve_journal_id, created_at, updated_at
 `
 
 type UpdateProviderPaymentStatusParams struct {
@@ -557,6 +753,8 @@ func (q *Queries) UpdateProviderPaymentStatus(ctx context.Context, arg UpdatePro
 		&i.AmountMinor,
 		&i.Currency,
 		&i.Raw,
+		&i.DestinationID,
+		&i.ReserveJournalID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)

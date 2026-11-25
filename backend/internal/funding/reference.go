@@ -11,6 +11,15 @@ const referenceAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 // NewReference builds a top-up receipt id like TU-7K2M-9QXA.
 func NewReference() (string, error) {
+	return newPrefixedReference("TU")
+}
+
+// NewCashOutReference builds a withdrawal receipt id like WD-7K2M-9QXA.
+func NewCashOutReference() (string, error) {
+	return newPrefixedReference("WD")
+}
+
+func newPrefixedReference(prefix string) (string, error) {
 	var buf [8]byte
 	if _, err := rand.Read(buf[:]); err != nil {
 		return "", fmt.Errorf("funding: reference entropy: %w", err)
@@ -19,16 +28,24 @@ func NewReference() (string, error) {
 	for i, b := range buf {
 		chars[i] = referenceAlphabet[int(b)%len(referenceAlphabet)]
 	}
-	return fmt.Sprintf("TU-%s-%s", chars[0:4], chars[4:8]), nil
+	return fmt.Sprintf("%s-%s-%s", prefix, chars[0:4], chars[4:8]), nil
 }
 
 func validReference(ref string) bool {
-	// Shape: TU-XXXX-XXXX. Prefix "TU" is a kind label (U is not in Crockford);
+	return validPrefixedReference(ref, "TU")
+}
+
+func validCashOutReference(ref string) bool {
+	return validPrefixedReference(ref, "WD")
+}
+
+func validPrefixedReference(ref, prefix string) bool {
+	// Shape: XX-XXXX-XXXX. Kind prefix may use letters outside Crockford (e.g. U in TU);
 	// only the eight entropy chars must be in the alphabet.
 	if len(ref) != 12 {
 		return false
 	}
-	if !strings.HasPrefix(ref, "TU-") || ref[7] != '-' {
+	if !strings.HasPrefix(ref, prefix+"-") || ref[7] != '-' {
 		return false
 	}
 	for _, i := range []int{3, 4, 5, 6, 8, 9, 10, 11} {
