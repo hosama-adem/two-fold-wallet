@@ -63,13 +63,14 @@ func TestLedgerHistoryRejectsUpdateDeleteAndTruncate(t *testing.T) {
 	assertRejected("postings", `UPDATE postings SET amount_minor = 1 WHERE journal_id = $1`, journalID)
 	assertRejected("postings", `DELETE FROM postings WHERE journal_id = $1`, journalID)
 	assertRejected("postings", `TRUNCATE postings`)
-	// Truncating journal_entries alone dies on the foreign key from postings
-	// before a statement trigger can run. Truncating both removes that
-	// excuse. The trigger still refuses, and it may name either table.
+	// Truncating journal_entries alone dies on FKs (postings, and Day 24
+	// provider_payments.reserve_journal_id) before a statement trigger can run.
+	// Truncating every referencing table removes that excuse. The trigger still
+	// refuses, and it may name either ledger table.
 	if _, err := tx.Exec(ctx, "SAVEPOINT ledger_mut"); err != nil {
 		t.Fatal(err)
 	}
-	_, err = tx.Exec(ctx, `TRUNCATE postings, journal_entries`)
+	_, err = tx.Exec(ctx, `TRUNCATE postings, provider_payments, journal_entries`)
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) || pgErr.Code != "23000" ||
 		(pgErr.Message != "postings is append-only" && pgErr.Message != "journal_entries is append-only") {
