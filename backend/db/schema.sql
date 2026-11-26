@@ -825,3 +825,17 @@ CREATE TABLE webhook_events (
 
 CREATE INDEX webhook_events_received_at_idx ON webhook_events (received_at DESC);
 
+CREATE TABLE outbox_events (
+    id             UUID PRIMARY KEY,
+    topic          TEXT NOT NULL,
+    payload        JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    dispatched_at  TIMESTAMPTZ,
+
+    CONSTRAINT outbox_events_topic_present CHECK (length(btrim(topic)) BETWEEN 1 AND 128)
+);
+
+CREATE INDEX outbox_events_undispatched_created_idx
+    ON outbox_events (created_at ASC, id ASC)
+    WHERE dispatched_at IS NULL;
+

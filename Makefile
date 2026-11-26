@@ -1,4 +1,4 @@
-.PHONY: up down logs run build test test-concurrency vet lint tidy health ready migrate-up migrate-down migrate-new generate seed
+.PHONY: up down logs run worker build test test-concurrency vet lint tidy health ready migrate-up migrate-down migrate-new generate seed
 
 ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 BACKEND := $(ROOT)/backend
@@ -26,6 +26,10 @@ tidy: ## Refresh Go module sums
 
 build: ## Compile the API
 	cd $(BACKEND) && go build -o bin/api ./cmd/api
+
+worker: ## Run River workers (outbox dispatch, cleanup, expiry, top-up poll)
+	@test -f $(ROOT)/.env || (echo "missing .env — copy .env.example to .env" && exit 1)
+	cd $(BACKEND) && go run ./cmd/worker
 
 test: ## Run unit + integration tests
 	cd $(BACKEND) && go test -p 1 ./...
