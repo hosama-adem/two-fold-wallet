@@ -16,6 +16,7 @@ import (
 	"github.com/hosama-adem/twofold/backend/internal/funding/fundingdb"
 	"github.com/hosama-adem/twofold/backend/internal/ledger"
 	"github.com/hosama-adem/twofold/backend/internal/limit"
+	"github.com/hosama-adem/twofold/backend/internal/outbox"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpx"
 	"github.com/hosama-adem/twofold/backend/internal/provider"
 	"github.com/hosama-adem/twofold/backend/internal/wallet"
@@ -245,6 +246,21 @@ func (s *Service) Withdraw(ctx context.Context, in WithdrawInput) (Withdrawal, e
 	})
 	if err != nil {
 		return Withdrawal{}, err
+	}
+	if s.outbox != nil {
+		if _, err := s.outbox.Write(ctx, tx, outbox.TopicWithdrawalProcessing, map[string]any{
+			"transaction_id": txn.ID,
+			"reference":      txn.Reference,
+			"kind":           txn.Kind,
+			"status":         txn.Status,
+			"amount_minor":   txn.AmountMinor,
+			"fee_minor":      txn.FeeMinor,
+			"currency":       txn.Currency,
+			"provider":       dest.Provider,
+			"provider_ref":   pay.ProviderRef,
+		}); err != nil {
+			return Withdrawal{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Withdrawal{}, err

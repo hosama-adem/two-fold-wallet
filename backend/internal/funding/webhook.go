@@ -16,6 +16,7 @@ import (
 	"github.com/hosama-adem/twofold/backend/internal/funding/fundingdb"
 	"github.com/hosama-adem/twofold/backend/internal/ledger"
 	"github.com/hosama-adem/twofold/backend/internal/limit"
+	"github.com/hosama-adem/twofold/backend/internal/outbox"
 	"github.com/hosama-adem/twofold/backend/internal/provider"
 )
 
@@ -253,10 +254,56 @@ func (s *Service) applyStatus(ctx context.Context, in applyInput) (WebhookResult
 		WHERE provider = $2 AND event_id = $3
 	`, updated.ID, in.ProviderPath, in.EventID)
 
+	if err := s.writeNotifyOutbox(ctx, tx, updated, plan); err != nil {
+		return WebhookResult{}, err
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return WebhookResult{}, err
 	}
 	return WebhookResult{Decision: plan.decision, Status: plan.to}, nil
+}
+
+func (s *Service) writeNotifyOutbox(ctx context.Context, tx pgx.Tx, txn fundingdb.Transaction, plan transition) error {
+	if s.outbox == nil {
+		return nil
+	}
+	topic, ok := notifyTopic(txn.Kind, plan)
+	if !ok {
+		return nil
+	}
+	payload := map[string]any{
+		"transaction_id": txn.ID,
+		"reference":      txn.Reference,
+		"kind":           txn.Kind,
+		"status":         plan.to,
+		"amount_minor":   txn.AmountMinor,
+		"fee_minor":      txn.FeeMinor,
+		"currency":       txn.Currency,
+		"reason":         plan.reason,
+	}
+	_, err := s.outbox.Write(ctx, tx, topic, payload)
+	return err
+}
+
+func notifyTopic(kind string, plan transition) (string, bool) {
+	switch kind {
+	case kindTopUp:
+		switch plan.to {
+		case statusCompleted:
+			return outbox.TopicTopUpCompleted, true
+		case statusFailed:
+			return outbox.TopicTopUpFailed, true
+		}
+	case kindCashOut:
+		switch plan.to {
+		case statusCompleted:
+			return outbox.TopicWithdrawalCompleted, true
+		case statusFailed:
+			return outbox.TopicWithdrawalFailedRefunded, true
+		}
+	}
+	return "", false
 }
 
 func (s *Service) creditWallet(

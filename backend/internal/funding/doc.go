@@ -7,5 +7,6 @@
 // Day 24: saved payout destinations store AES-GCM ciphertext. Withdrawals
 // reserve funds immediately (wallet → payouts_pending), then a payout webhook
 // either settles (payouts_pending → clearing) or refunds via ledger.Reverse.
-// transaction_events carry notify_ready reasons for Day 25/26.
+// Outbox topics fire in the same transaction as settle/refund/credit
+// (Day 25); Day 26 turns those into notifications.
 package funding

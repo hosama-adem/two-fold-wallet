@@ -318,6 +318,12 @@ func (s *Service) Cancel(ctx context.Context, requesterID, requestID uuid.UUID) 
 	return s.view(ctx, row, requesterID)
 }
 
+// ExpireDue marks pending requests past expires_at as expired.
+// cmd/worker runs this on a River schedule; list/pay/cancel still call it eagerly.
+func (s *Service) ExpireDue(ctx context.Context) error {
+	return s.expireDue(ctx)
+}
+
 func (s *Service) expireDue(ctx context.Context) error {
 	return s.q.ExpireDueRequests(ctx)
 }

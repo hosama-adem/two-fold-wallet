@@ -19,6 +19,7 @@ import (
 	"github.com/hosama-adem/twofold/backend/internal/ledger"
 	"github.com/hosama-adem/twofold/backend/internal/ledger/ledgerdb"
 	"github.com/hosama-adem/twofold/backend/internal/limit"
+	"github.com/hosama-adem/twofold/backend/internal/outbox"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpx"
 	"github.com/hosama-adem/twofold/backend/internal/transfer/transferdb"
 	"github.com/hosama-adem/twofold/backend/internal/wallet"
@@ -35,15 +36,17 @@ const (
 
 // Service posts peer-to-peer transfers.
 type Service struct {
-	pool *pgxpool.Pool
-	fees *fee.Service
+	pool   *pgxpool.Pool
+	fees   *fee.Service
+	outbox *outbox.Writer
 }
 
 // NewService builds a transfer service on a pgx pool.
 func NewService(pool *pgxpool.Pool) *Service {
 	return &Service{
-		pool: pool,
-		fees: fee.NewService(pool),
+		pool:   pool,
+		fees:   fee.NewService(pool),
+		outbox: outbox.NewWriter(),
 	}
 }
 
@@ -386,6 +389,20 @@ func (s *Service) transferOnTx(
 	}
 	if completed.Status != statusCompleted {
 		return Result{}, httpx.Internal("Transfer did not complete.")
+	}
+
+	if s.outbox != nil {
+		if _, err := s.outbox.Write(ctx, tx, outbox.TopicTransferCompleted, map[string]any{
+			"transaction_id": completed.ID,
+			"reference":      completed.Reference,
+			"amount_minor":   completed.AmountMinor,
+			"fee_minor":      completed.FeeMinor,
+			"currency":       completed.Currency,
+			"from_wallet_id": fromID,
+			"to_wallet_id":   toID,
+		}); err != nil {
+			return Result{}, err
+		}
 	}
 
 	return Result{Transaction: transactionFrom(completed)}, nil

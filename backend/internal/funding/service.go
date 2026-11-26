@@ -20,6 +20,7 @@ import (
 	"github.com/hosama-adem/twofold/backend/internal/funding/fundingdb"
 	"github.com/hosama-adem/twofold/backend/internal/ledger"
 	"github.com/hosama-adem/twofold/backend/internal/ledger/ledgerdb"
+	"github.com/hosama-adem/twofold/backend/internal/outbox"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpx"
 	"github.com/hosama-adem/twofold/backend/internal/provider"
 	"github.com/hosama-adem/twofold/backend/internal/wallet"
@@ -56,13 +57,14 @@ const (
 
 // Service owns top-ups, withdrawals, destinations, and provider webhooks.
 type Service struct {
-	pool  *pgxpool.Pool
-	rail  provider.Provider
-	audit *audit.Recorder
-	fees  *fee.Service
-	box   *SecretBox
-	log   *slog.Logger
-	now   func() time.Time
+	pool   *pgxpool.Pool
+	rail   provider.Provider
+	audit  *audit.Recorder
+	fees   *fee.Service
+	box    *SecretBox
+	outbox *outbox.Writer
+	log    *slog.Logger
+	now    func() time.Time
 }
 
 // NewService builds a funding service. box may be nil if withdrawals are disabled.
@@ -71,13 +73,14 @@ func NewService(pool *pgxpool.Pool, rail provider.Provider, audits *audit.Record
 		log = slog.Default()
 	}
 	return &Service{
-		pool:  pool,
-		rail:  rail,
-		audit: audits,
-		fees:  fee.NewService(pool),
-		box:   box,
-		log:   log,
-		now:   time.Now,
+		pool:   pool,
+		rail:   rail,
+		audit:  audits,
+		fees:   fee.NewService(pool),
+		box:    box,
+		outbox: outbox.NewWriter(),
+		log:    log,
+		now:    time.Now,
 	}
 }
 
