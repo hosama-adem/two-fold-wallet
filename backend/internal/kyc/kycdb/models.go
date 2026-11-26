@@ -109,6 +109,14 @@ type OtpCode struct {
 	CreatedAt  time.Time  `json:"created_at"`
 }
 
+type OutboxEvent struct {
+	ID           uuid.UUID       `json:"id"`
+	Topic        string          `json:"topic"`
+	Payload      json.RawMessage `json:"payload"`
+	CreatedAt    time.Time       `json:"created_at"`
+	DispatchedAt *time.Time      `json:"dispatched_at"`
+}
+
 type PayoutDestination struct {
 	ID                   uuid.UUID  `json:"id"`
 	UserID               uuid.UUID  `json:"user_id"`
