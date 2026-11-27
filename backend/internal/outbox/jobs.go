@@ -75,16 +75,33 @@ func (p *RiverPublisher) PublishOutbox(ctx context.Context, tx pgx.Tx, eventID u
 	return err
 }
 
-// DeliverWorker acknowledges delivered outbox events (Day 26 replaces this).
-type DeliverWorker struct {
-	river.WorkerDefaults[DeliverArgs]
-	Log *slog.Logger
+// Deliverer turns a claimed outbox event into side effects (notifications).
+type Deliverer interface {
+	Deliver(ctx context.Context, eventID uuid.UUID, topic string, payload json.RawMessage) error
 }
 
-func (w *DeliverWorker) Work(_ context.Context, job *river.Job[DeliverArgs]) error {
+// DeliverWorker runs the notification consumer for each outbox.deliver job.
+type DeliverWorker struct {
+	river.WorkerDefaults[DeliverArgs]
+	Deliverer Deliverer
+	Log       *slog.Logger
+}
+
+func (w *DeliverWorker) Work(ctx context.Context, job *river.Job[DeliverArgs]) error {
 	log := w.Log
 	if log == nil {
 		log = slog.Default()
+	}
+	if w.Deliverer == nil {
+		log.Info("outbox delivered (no consumer)",
+			"event_id", job.Args.EventID,
+			"topic", job.Args.Topic,
+			"job_id", job.ID,
+		)
+		return nil
+	}
+	if err := w.Deliverer.Deliver(ctx, job.Args.EventID, job.Args.Topic, job.Args.Payload); err != nil {
+		return err
 	}
 	log.Info("outbox delivered",
 		"event_id", job.Args.EventID,

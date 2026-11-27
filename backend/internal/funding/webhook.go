@@ -282,6 +282,15 @@ func (s *Service) writeNotifyOutbox(ctx context.Context, tx pgx.Tx, txn fundingd
 		"currency":       txn.Currency,
 		"reason":         plan.reason,
 	}
+	if txn.FromWalletID != nil {
+		payload["from_wallet_id"] = *txn.FromWalletID
+	}
+	if txn.ToWalletID != nil {
+		payload["to_wallet_id"] = *txn.ToWalletID
+	}
+	if txn.InitiatorUserID != nil {
+		payload["initiator_user_id"] = *txn.InitiatorUserID
+	}
 	_, err := s.outbox.Write(ctx, tx, topic, payload)
 	return err
 }

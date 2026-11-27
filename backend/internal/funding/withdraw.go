@@ -248,7 +248,7 @@ func (s *Service) Withdraw(ctx context.Context, in WithdrawInput) (Withdrawal, e
 		return Withdrawal{}, err
 	}
 	if s.outbox != nil {
-		if _, err := s.outbox.Write(ctx, tx, outbox.TopicWithdrawalProcessing, map[string]any{
+		payload := map[string]any{
 			"transaction_id": txn.ID,
 			"reference":      txn.Reference,
 			"kind":           txn.Kind,
@@ -258,7 +258,14 @@ func (s *Service) Withdraw(ctx context.Context, in WithdrawInput) (Withdrawal, e
 			"currency":       txn.Currency,
 			"provider":       dest.Provider,
 			"provider_ref":   pay.ProviderRef,
-		}); err != nil {
+		}
+		if txn.FromWalletID != nil {
+			payload["from_wallet_id"] = *txn.FromWalletID
+		}
+		if txn.InitiatorUserID != nil {
+			payload["initiator_user_id"] = *txn.InitiatorUserID
+		}
+		if _, err := s.outbox.Write(ctx, tx, outbox.TopicWithdrawalProcessing, payload); err != nil {
 			return Withdrawal{}, err
 		}
 	}

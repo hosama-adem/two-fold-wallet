@@ -15,6 +15,7 @@ import (
 	"github.com/hosama-adem/twofold/backend/internal/history"
 	"github.com/hosama-adem/twofold/backend/internal/kyc"
 	"github.com/hosama-adem/twofold/backend/internal/moneyrequest"
+	"github.com/hosama-adem/twofold/backend/internal/notification"
 	"github.com/hosama-adem/twofold/backend/internal/platform/config"
 	"github.com/hosama-adem/twofold/backend/internal/platform/database"
 	"github.com/hosama-adem/twofold/backend/internal/platform/httpx"
@@ -41,6 +42,7 @@ type Options struct {
 	History       *history.Handler
 	MoneyRequests *moneyrequest.Handler
 	Funding       *funding.Handler
+	Notifications *notification.Handler
 	// RequestTimeout overrides the per-request deadline. Zero keeps the
 	// standard 10s timeout. The concurrency suite raises it: a thousand
 	// transfers on one pair queue on the row lock, and that wait is the proof,
@@ -119,6 +121,9 @@ func (s *Server) routes(opts Options) {
 	}
 	if opts.Funding != nil {
 		opts.Funding.Mount(s.engine)
+	}
+	if opts.Notifications != nil {
+		opts.Notifications.Mount(s.engine)
 	}
 	s.engine.NoRoute(s.handleNotFound)
 }

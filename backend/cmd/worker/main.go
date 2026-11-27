@@ -14,6 +14,7 @@ import (
 	"github.com/hosama-adem/twofold/backend/internal/audit"
 	"github.com/hosama-adem/twofold/backend/internal/funding"
 	"github.com/hosama-adem/twofold/backend/internal/moneyrequest"
+	"github.com/hosama-adem/twofold/backend/internal/notification"
 	"github.com/hosama-adem/twofold/backend/internal/outbox"
 	"github.com/hosama-adem/twofold/backend/internal/platform/config"
 	"github.com/hosama-adem/twofold/backend/internal/platform/database"
@@ -72,10 +73,13 @@ func run() int {
 		pollStale = fundingSvc.PollStale
 	}
 
+	notifyConsumer := notification.NewConsumer(pool, notification.LogSender{Log: log}, log)
+
 	workers := river.NewWorkers()
 	outbox.RegisterWorkers(workers, outbox.WorkerDeps{
 		Pool:       pool,
 		Dispatcher: dispatcher,
+		Deliverer:  notifyConsumer,
 		Log:        log,
 		ExpireDue:  requests.ExpireDue,
 		PollStale:  pollStale,

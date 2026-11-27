@@ -15,6 +15,7 @@ import (
 	"github.com/hosama-adem/twofold/backend/internal/kyc"
 	"github.com/hosama-adem/twofold/backend/internal/limit"
 	"github.com/hosama-adem/twofold/backend/internal/moneyrequest"
+	"github.com/hosama-adem/twofold/backend/internal/notification"
 	"github.com/hosama-adem/twofold/backend/internal/pin"
 	"github.com/hosama-adem/twofold/backend/internal/platform/config"
 	"github.com/hosama-adem/twofold/backend/internal/platform/database"
@@ -113,6 +114,11 @@ func run() int {
 		idempotency.Middleware(idemStore, auth.UserIDFromContext),
 		auth.UserIDFromContext,
 	)
+	notificationHandler := notification.NewHandler(
+		notification.NewService(pool),
+		authHandler.RequireAccess(),
+		auth.UserIDFromContext,
+	)
 
 	var fundingHandler *funding.Handler
 	rail, railErr := provider.NewClient(provider.ClientConfig{
@@ -144,6 +150,7 @@ func run() int {
 		History:       historyHandler,
 		MoneyRequests: moneyRequestHandler,
 		Funding:       fundingHandler,
+		Notifications: notificationHandler,
 	})
 	if err := srv.Run(ctx); err != nil {
 		log.Error("server", "error", err)
