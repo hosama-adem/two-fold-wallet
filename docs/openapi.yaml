@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Twofold Customer API
-  version: 0.5.0
+  version: 0.6.0
   summary: Customer-facing wallet API for Ethiopia (ETB minor units).
   description: |
     Every birr, recorded twice. Money fields are integer minor units
@@ -26,6 +26,7 @@ tags:
   - name: Destinations
   - name: Webhooks
   - name: KYC
+  - name: Notifications
 security: []
 paths:
   /health:
@@ -896,6 +897,62 @@ paths:
         "401":
           $ref: "#/components/responses/Problem"
         "409":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+
+  /v1/notifications:
+    get:
+      tags: [Notifications]
+      summary: List in-app notifications
+      operationId: listNotifications
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        "200":
+          description: Newest notifications for the caller
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationList"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "422":
+          $ref: "#/components/responses/Problem"
+
+  /v1/notifications/{id}/read:
+    post:
+      tags: [Notifications]
+      summary: Mark a notification as read
+      operationId: markNotificationRead
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Notification marked read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Notification"
+        "401":
+          $ref: "#/components/responses/Problem"
+        "404":
           $ref: "#/components/responses/Problem"
         "422":
           $ref: "#/components/responses/Problem"
@@ -1943,3 +2000,41 @@ components:
           format: date-time
         idempotency_key:
           type: string
+
+    Notification:
+      type: object
+      required: [id, topic, title, body, data, created_at]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        topic:
+          type: string
+        title:
+          type: string
+        body:
+          type: string
+        data:
+          type: object
+          additionalProperties: true
+        read_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+
+    NotificationList:
+      type: object
+      required: [items, unread_count]
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Notification"
+        unread_count:
+          type: integer
+          format: int64
+          minimum: 0

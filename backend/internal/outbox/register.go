@@ -13,15 +13,16 @@ import (
 type WorkerDeps struct {
 	Pool       *pgxpool.Pool
 	Dispatcher *Dispatcher
+	Deliverer  Deliverer
 	Log        *slog.Logger
 	ExpireDue  func(context.Context) error
 	PollStale  func(context.Context) (int, error)
 	Now        func() time.Time
 }
 
-// RegisterWorkers adds Day 25 job handlers to a River workers bundle.
+// RegisterWorkers adds outbox and periodic job handlers to a River workers bundle.
 func RegisterWorkers(workers *river.Workers, deps WorkerDeps) {
-	river.AddWorker(workers, &DeliverWorker{Log: deps.Log})
+	river.AddWorker(workers, &DeliverWorker{Deliverer: deps.Deliverer, Log: deps.Log})
 	river.AddWorker(workers, &DispatchWorker{Dispatcher: deps.Dispatcher})
 	river.AddWorker(workers, &IdempotencyCleanupWorker{Pool: deps.Pool, Now: deps.Now})
 	river.AddWorker(workers, &RequestExpiryWorker{Expire: deps.ExpireDue})
