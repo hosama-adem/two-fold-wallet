@@ -183,7 +183,7 @@ func seedWallet(t *testing.T, pool *pgxpool.Pool, userID uuid.UUID) uuid.UUID {
 	}
 	_, err = pool.Exec(ctx, `
 		INSERT INTO wallets (id, user_id, account_id, currency, status, freeze_mode)
-		VALUES ($1, $2, $3, 'ETB', 'open', 'none')
+		VALUES ($1, $2, $3, 'ETB', 'active', 'none')
 	`, walletID, userID, accountID)
 	if err != nil {
 		t.Fatal(err)
