@@ -98,6 +98,18 @@ type MoneyRequest struct {
 	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
+type Notification struct {
+	ID            uuid.UUID       `json:"id"`
+	UserID        uuid.UUID       `json:"user_id"`
+	OutboxEventID uuid.UUID       `json:"outbox_event_id"`
+	Topic         string          `json:"topic"`
+	Title         string          `json:"title"`
+	Body          string          `json:"body"`
+	Data          json.RawMessage `json:"data"`
+	ReadAt        *time.Time      `json:"read_at"`
+	CreatedAt     time.Time       `json:"created_at"`
+}
+
 type OtpCode struct {
 	ID         uuid.UUID  `json:"id"`
 	PhoneE164  string     `json:"phone_e164"`
